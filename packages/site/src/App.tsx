@@ -1,124 +1,103 @@
+import { LinkedSet, useLinkedSet } from "@mrkev/substate/LinkedSet";
 import { useState } from "react";
-import GitHubButton from "react-github-btn";
-import { add } from "../../NEW_LIB/src";
 import "./App.css";
+import { CamelotChord, camelotToMidi } from "./CamelotChord";
+import CamelotWheel from "./CamelotWheel";
+import { getMajorTriad } from "./chords";
+import { MidiOutputSelector } from "./MidiOutputSelector";
+import PianoKeys from "./PianoKeys";
+import { noteoff, noteon } from "./utils/midi";
 
-const FOLDER_STRUCTURE = `
-docs/             built website, configure GH Pages to point here
-packages/
-  NEW_LIB/        source for the library
-  site/           source code for the site
-`.trim();
+const highlightedSet = LinkedSet.create<number>(new Set());
 
 export function App() {
-  const [count, setCount] = useState(0);
+  const [output, setOutput] = useState<MIDIOutput | null>(null);
+  const [octave, setOctave] = useState(0);
+  const [logArr, setLogArr] = useState<string[]>([]);
+  const [highlighted, setHighlighted] = useState<number[]>([]);
+  const linkedSet = useLinkedSet(highlightedSet);
+
+  function log(str: string) {
+    setLogArr((prev) => [str, ...prev]);
+  }
+
+  const sendNote = () => {
+    if (!output) {
+      alert("No MIDI output selected!");
+      return;
+    }
+
+    // Middle C on, then off after 0.5s
+    const NOTE_ON = [0x90, 60, 127];
+    const NOTE_OFF = [0x80, 60, 0];
+    output.send(NOTE_ON);
+    output.send(NOTE_OFF, window.performance.now() + 500);
+  };
+
+  const sendChordDown = (chord: CamelotChord) => {
+    if (!output) {
+      alert("No MIDI output selected!");
+      return;
+    }
+
+    const notes = getMajorTriad(camelotToMidi[chord]);
+    setHighlighted(notes);
+    for (const note of notes) {
+      output.send(noteon(note + octave * 12));
+    }
+    log("sent");
+  };
+
+  const sendChordUp = (chord: CamelotChord) => {
+    if (!output) {
+      alert("No MIDI output selected!");
+      return;
+    }
+
+    const notes = getMajorTriad(camelotToMidi[chord]);
+
+    for (const note of notes) {
+      output.send(noteoff(note + octave * 12), window.performance.now());
+    }
+    log("done");
+  };
 
   return (
-    <>
-      <h1>
-        Simple
-        <br />
-        Vite + React + TypeScript
-        <br />
-        Monorepo Library Template
-      </h1>
-
-      <p>
-        <a href="https://github.com/mrkev/new-react-ts-monorepo-lib">
-          github.com/mrkev/new-react-ts-monorepo-lib
-        </a>
-      </p>
-
-      <GitHubButton
-        href="https://github.com/mrkev/new-react-ts-monorepo-lib"
-        data-color-scheme="no-preference: light; light: light; dark: dark;"
-        data-icon="octicon-star"
-        data-size="large"
-        aria-label="Star mrkev/new-react-ts-monorepo-lib on GitHub"
-      >
-        Star
-      </GitHubButton>
-      <GitHubButton
-        href="https://github.com/mrkev/new-react-ts-monorepo-lib/generate"
-        data-color-scheme="no-preference: light; light: light; dark: dark;"
-        data-icon="octicon-repo-template"
-        data-size="large"
-        aria-label="Use this template mrkev/new-react-ts-monorepo-lib on GitHub"
-      >
-        Use this template
-      </GitHubButton>
-
-      {/* Instructions */}
-      <h2 className="left">Getting Started</h2>
-      <ol style={{ textAlign: "left" }}>
-        <li>
-          Click <code>"Use Template"</code> above
-        </li>
-        <li>Clone the repo you created</li>
-        <li>Use these scripts:</li>
-        {/* Scripts */}
-        <ul style={{ textAlign: "left" }}>
-          <li>
-            <code>build</code> builds this website and the library ready for
-            publishing
-          </li>
-          <li>
-            <code>build:site</code> builds only the website
-          </li>
-          <li>
-            <code>build:lib</code> builds only the library
-          </li>
-          <li>
-            <code>dev</code> starts the dev server
-          </li>
-        </ul>
-        <li>Edit away! Folder structure:</li>
-        <pre
-          style={{
-            textAlign: "left",
-            background: "black",
-            color: "white",
-            padding: "2px 3px 1px 3px",
-          }}
+    <div className="p-4 flex flex-col gap-4">
+      <MidiOutputSelector onSelect={setOutput} selected={output} />
+      <div className="flex flex-row">
+        <button
+          onClick={() => setOctave((prev) => prev - 1)}
+          className="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700"
         >
-          {FOLDER_STRUCTURE}
-        </pre>
-      </ol>
-      <hr></hr>
-
-      <p className="left">
-        This sample library just adds two numbers.
-        <br />
-        The latest version is always built with the site:
-      </p>
-      <button onClick={() => setCount((count) => add(count, 1))}>
-        add one: {count}
-      </button>
-      <p></p>
-
-      <hr></hr>
-
-      <p
-        className="read-the-docs"
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          gap: "5px",
-          justifyContent: "center",
-        }}
-      >
-        <a href="https://aykev.dev/">Kevin Chavez</a> ·
-        <a href="https://twitter.com/aykev">@aykev</a> ·
-        <GitHubButton
-          href="https://github.com/mrkev"
-          data-color-scheme="no-preference: light; light: light; dark: dark;"
-          data-size="large"
-          data-show-count="true"
-          aria-label="Follow @mrkev on GitHub"
+          -
+        </button>
+        [{octave}]
+        <button
+          onClick={() => setOctave((prev) => prev + 1)}
+          className="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700"
         >
-          Follow @mrkev
-        </GitHubButton>
-      </p>
-    </>
+          +
+        </button>
+      </div>
+      <PianoKeys
+        lowestNote={48 + 5} // C3
+        highestNote={72 + 5} // C5
+        highlightedKeys={highlighted}
+        onKeyDown={(note) => console.log("Key Down:", note)}
+        onKeyUp={(note) => console.log("Key Up:", note)}
+      />
+      <CamelotWheel
+        onChordDown={sendChordDown}
+        onChordUp={sendChordUp}
+
+        // onChordClick={(chord) => {
+        //   console.log("8B (C major):", camelotToMidi[chord]);
+        //   const triad = getMajorTriad(camelotToMidi[chord]);
+        //   sendChord(triad);
+        // }}
+      />
+      {/* <pre>{logArr.join("\n")}</pre> */}
+    </div>
   );
 }
