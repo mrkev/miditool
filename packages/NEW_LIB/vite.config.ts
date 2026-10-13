@@ -1,11 +1,11 @@
-import { resolve } from "path";
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import dts from "vite-plugin-dts";
 
-// https://vitejs.dev/config/
+// https://vite.dev/config/
 export default defineConfig({
   logLevel: "info",
-  plugins: [dts()],
+  plugins: [dts({ tsconfigPath: "./tsconfig.app.json" })],
   server: {
     port: 5174,
   },
@@ -14,12 +14,12 @@ export default defineConfig({
     minify: false,
     lib: {
       // Could also be a dictionary or array of multiple entry points
-      entry: resolve(__dirname, "src/index.ts"),
-      name: "NEW_LIB",
-      // the proper extensions will be added
-      fileName: "NEW_LIB",
+      entry: resolve(import.meta.dirname, "src/index.ts"),
+      name: "miditool",
+      // the proper extensions will be added. Must match "main"/"module" in package.json
+      fileName: "miditool",
     },
-    rollupOptions: {
+    rolldownOptions: {
       // make sure to externalize deps that shouldn't be bundled nto your library
       external: ["react", "react-dom"],
       output: {

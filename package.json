@@ -4,24 +4,23 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run --workspace=site dev",
-    "build": "npx nx run-many -t build",
-    "build:site": "npm run --workspace=site build",
-    "build:lib": "npm run --workspace=miditool build",
-    "lint": "eslint"
+    "dev": "pnpm --filter site dev",
+    "build": "nx run-many -t build",
+    "build:site": "pnpm --filter site build",
+    "build:lib": "pnpm --filter miditool build",
+    "lint": "eslint",
+    "typecheck": "nx run-many -t typecheck"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.29.7",
-    "@eslint/compat": "^1.4.0",
-    "@eslint/js": "^9.38.0",
-    "eslint": "^9.38.0",
-    "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.20",
-    "globals": "^16.4.0",
-    "nx": "22.0.1",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.2"
+    "@changesets/cli": "^3.0.3",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "nx": "23.3.0",
+    "typescript": "~6.0.0",
+    "typescript-eslint": "^8.71.2"
   },
   "packageManager": "pnpm@10.19.0"
 }
