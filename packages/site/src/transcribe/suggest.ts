@@ -41,6 +41,18 @@ const ONSET_DB = 6;
 const ONSET_LOOKBACK = 3;
 
 /**
+ * Rows used to time a note's onset: the note itself and its 2nd and 3rd
+ * harmonics, as semitone offsets. Higher harmonics are analysed with shorter
+ * windows, so they show the attack more sharply, but going higher risks
+ * landing on another note's onset.
+ */
+const ONSET_ROWS = [0, 12, 19];
+/** Span over which an onset rise is measured, as a fraction of the window */
+const RISE_FRACTION = 0.25;
+/** Minimum rise for an onset to count, as a fraction of the note's peak */
+const MIN_ONSET_RISE = 0.15;
+
+/**
  * Maps a note's peak level (dB below the loudest point) to a velocity.
  * Recordings don't say how hard notes were played, so this is a guess
  * that keeps louder notes louder.
@@ -129,6 +141,60 @@ export function suggestNotes(
   }
 
   const minFrames = Math.max(2, Math.ceil(MIN_NOTE_SECONDS / frameDuration));
+  /** Analysis window length of each pitch, in frames */
+  const windowFramesOf = Array.from({ length: NUM_PITCHES }, (_, i) =>
+    Math.max(
+      1,
+      Math.round(
+        fftSizeForPitch(MIN_NOTE + i, sampleRate, binsPerSemitone) /
+          sampleRate /
+          frameDuration,
+      ),
+    ),
+  );
+
+  /**
+   * Times the onset of a note at pitch index `i` detected from frame
+   * `detected`, as the steepest rise in level near it. A window ramps a
+   * note's level up over its whole length, steepest at the actual onset.
+   * Uses whichever of the note's onset rows has energy and the shortest
+   * window. Returns null if there's no clear rise.
+   */
+  const refineOnset = (i: number, detected: number, noteEnd: number) => {
+    const ownWindow = windowFramesOf[i];
+    let best: { j: number; window: number; peak: number } | null = null;
+    for (const offset of ONSET_ROWS) {
+      const j = i + offset;
+      if (j >= NUM_PITCHES) break;
+      let peak = -Infinity;
+      for (let t = detected; t < noteEnd; t++) {
+        peak = Math.max(peak, db[j * width + t]);
+      }
+      if (peak < floorDb) continue;
+      if (best == null || windowFramesOf[j] < best.window) {
+        best = { j, window: windowFramesOf[j], peak: Math.pow(10, peak / 20) };
+      }
+    }
+    if (best == null) return null;
+
+    // The detected start lies within half a window of the onset, either way
+    const span = Math.max(1, Math.round(RISE_FRACTION * best.window));
+    const from = Math.max(span, detected - Math.ceil(ownWindow / 2));
+    const to = Math.min(noteEnd, detected + Math.ceil(ownWindow * 0.75));
+    // Linear level: in dB, a ramp out of silence is steepest at its very
+    // start rather than its middle
+    const row = best.j * width;
+    let steepest = MIN_ONSET_RISE * best.peak;
+    let onset: number | null = null;
+    for (let t = from; t < to; t++) {
+      const rise = lin[row + t] - lin[row + t - span];
+      if (rise > steepest) {
+        steepest = rise;
+        onset = t - span / 2;
+      }
+    }
+    return onset;
+  };
 
   /** dB rise of pitch index i at frame t over the previous few frames */
   const rise = (i: number, t: number) => {
@@ -165,8 +231,12 @@ export function suggestNotes(
     let start = -1;
     const end = (t: number) => {
       if (start >= 0 && t - start >= windowFrames) {
-        const startSeconds = start * frameDuration + smear;
         const endSeconds = t * frameDuration - smear;
+        const onset = refineOnset(i, start, t);
+        const startSeconds = Math.min(
+          endSeconds - MIN_NOTE_SECONDS,
+          onset != null ? onset * frameDuration : start * frameDuration + smear,
+        );
         let peakDb = -Infinity;
         for (let f = start; f < t; f++) peakDb = Math.max(peakDb, db[row + f]);
         notes.push({
