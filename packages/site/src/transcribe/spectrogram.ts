@@ -19,6 +19,7 @@ export interface Spectrogram {
   height: number;
   /** Seconds between frames */
   frameDuration: number;
+  sampleRate: number;
   /** Magnitude in dB relative to the loudest bin (<= 0), row-major */
   data: Float32Array;
 }
@@ -58,6 +59,17 @@ export function planSpectrogram(
   return { hop, width: Math.max(1, Math.ceil(numSamples / hop)) };
 }
 
+/** FFT size (window length in samples) used for rows around `pitch` */
+export function fftSizeForPitch(pitch: number, sampleRate: number) {
+  const semitoneHz =
+    midiToFrequency(pitch + 0.5) - midiToFrequency(pitch - 0.5);
+  return (
+    FFT_SIZES.find(
+      (size) => semitoneHz / (sampleRate / size) >= MIN_BINS_PER_SEMITONE,
+    ) ?? FFT_SIZES[FFT_SIZES.length - 1]
+  );
+}
+
 /** Samples on each side of a frame's center that computing it reads */
 export const MAX_FFT_HALF = FFT_SIZES[FFT_SIZES.length - 1] / 2;
 
@@ -81,13 +93,7 @@ export function computeColumns(
   // Assign each row to an FFT size
   const rowsBySize = new Map<number, number[]>();
   for (let row = 0; row < NUM_ROWS; row++) {
-    const pitch = rowToPitch(row);
-    const semitoneHz =
-      midiToFrequency(pitch + 0.5) - midiToFrequency(pitch - 0.5);
-    const size =
-      FFT_SIZES.find(
-        (size) => semitoneHz / (sampleRate / size) >= MIN_BINS_PER_SEMITONE,
-      ) ?? FFT_SIZES[FFT_SIZES.length - 1];
+    const size = fftSizeForPitch(rowToPitch(row), sampleRate);
     const rows = rowsBySize.get(size) ?? [];
     rows.push(row);
     rowsBySize.set(size, rows);

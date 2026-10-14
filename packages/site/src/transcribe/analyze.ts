@@ -103,7 +103,13 @@ export async function analyze(
     });
     toDecibels(data);
 
-    return { width, height: NUM_ROWS, frameDuration: hop / sampleRate, data };
+    return {
+      width,
+      height: NUM_ROWS,
+      frameDuration: hop / sampleRate,
+      sampleRate,
+      data,
+    };
   } finally {
     terminate();
     signal.removeEventListener("abort", terminate);

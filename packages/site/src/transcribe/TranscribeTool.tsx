@@ -9,6 +9,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import {
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -22,12 +23,20 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { analyze, toMono } from "./analyze";
 import { renderSpectrogram } from "./colormap";
-import { DEFAULT_GRID, type Grid } from "./grid";
+import { DEFAULT_GRID, snapStep, snapTime, type Grid } from "./grid";
 import { GridControls } from "./GridControls";
 import { useNoteHistory } from "./history";
-import { createNote, midiToNotes, noteName, notesToMidi } from "./notes";
+import {
+  createNote,
+  midiToNotes,
+  noteName,
+  notesToMidi,
+  type Note,
+} from "./notes";
 import { PianoRoll, type HoverInfo } from "./PianoRoll";
 import { Player } from "./player";
+import { SuggestControls } from "./SuggestControls";
+import { suggestNotes } from "./suggest";
 import {
   loadSession,
   saveSession,
@@ -76,6 +85,9 @@ export function TranscribeTool() {
   const [zoom, setZoom] = useState(150);
   const [mix, setMix] = useState<string[]>(["audio", "notes"]);
   const [grid, setGrid] = useState<Grid>(DEFAULT_GRID);
+  const [suggesting, setSuggesting] = useState(false);
+  const [sensitivity, setSensitivity] = useState(0.4);
+  const deferredSensitivity = useDeferredValue(sensitivity);
   const {
     notes,
     setNotes,
@@ -132,6 +144,55 @@ export function TranscribeTool() {
     () => (spectrogram ? renderSpectrogram(spectrogram, floorDb) : null),
     [spectrogram, floorDb],
   );
+
+  const detected = useMemo(
+    () =>
+      suggesting && spectrogram
+        ? suggestNotes(spectrogram, { sensitivity: deferredSensitivity })
+        : [],
+    [suggesting, spectrogram, deferredSensitivity],
+  );
+  // Hide suggestions already covered by a note
+  const suggestions = useMemo(
+    () =>
+      detected.filter(
+        (s) =>
+          !notes.some(
+            (n) =>
+              n.pitch === s.pitch &&
+              n.start < s.start + s.duration &&
+              s.start < n.start + n.duration,
+          ),
+      ),
+    [detected, notes],
+  );
+
+  /** Snaps a note's start and end to the grid */
+  const snapNote = (note: Omit<Note, "id">): Omit<Note, "id"> => {
+    const step = snapStep(grid);
+    if (step == null) return note;
+    const start = Math.max(0, snapTime(grid, note.start));
+    const end = Math.max(
+      start + step,
+      snapTime(grid, note.start + note.duration),
+    );
+    return { ...note, start, duration: end - start };
+  };
+
+  const acceptSuggestion = (index: number) => {
+    const suggestion = suggestions[index];
+    if (suggestion == null) return null;
+    const note = createNote(snapNote(suggestion));
+    commit((notes) => [...notes, note]);
+    return note.id;
+  };
+
+  const acceptAllSuggestions = () => {
+    const accepted = suggestions.map((s) => createNote(snapNote(s)));
+    commit((notes) => [...notes, ...accepted]);
+    setSuggesting(false);
+    setNotice(`Added ${accepted.length} suggested notes`);
+  };
 
   useEffect(() => () => player?.dispose(), [player]);
   useEffect(() => player?.setNotes(notes), [player, notes]);
@@ -211,6 +272,7 @@ export function TranscribeTool() {
     setFileName(file.name);
     setError(null);
     setSpectrogram(null);
+    setSuggesting(false);
     setSelectedId(null);
     setProgress(0);
 
@@ -437,6 +499,14 @@ export function TranscribeTool() {
               onChange={setGrid}
               currentTime={currentTime}
             />
+            <SuggestControls
+              active={suggesting}
+              onActiveChange={setSuggesting}
+              sensitivity={sensitivity}
+              onSensitivityChange={setSensitivity}
+              count={suggestions.length}
+              onAcceptAll={acceptAllSuggestions}
+            />
 
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Zoom
@@ -521,6 +591,8 @@ export function TranscribeTool() {
               semitoneHeight={SEMITONE_HEIGHT}
               grid={grid}
               onHover={setHover}
+              suggestions={suggestions}
+              onAcceptSuggestion={acceptSuggestion}
             />
           </div>
 

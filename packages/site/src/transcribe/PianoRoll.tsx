@@ -75,6 +75,10 @@ export interface PianoRollProps {
   semitoneHeight: number;
   grid: Grid;
   onHover: (info: HoverInfo | null) => void;
+  /** Detected notes shown as ghosts until accepted */
+  suggestions: Omit<Note, "id">[];
+  /** Accepts a suggestion, returning the id of the note it became */
+  onAcceptSuggestion: (index: number) => number | null;
 }
 
 function formatRulerTime(seconds: number, step: number) {
@@ -149,6 +153,7 @@ export function PianoRoll(props: PianoRollProps) {
       player,
       duration,
       grid,
+      suggestions,
     } = propsRef.current;
     const dpr = window.devicePixelRatio || 1;
     const ctx = canvas.getContext("2d")!;
@@ -258,6 +263,30 @@ export function PianoRoll(props: PianoRollProps) {
       ctx.fillStyle = "rgba(255, 255, 255, 0.07)";
       ctx.fillRect(KEYS_WIDTH, pitchToY(hoverPitch), areaWidth, semitoneHeight);
     }
+
+    // Suggestions
+    ctx.setLineDash([3, 3]);
+    for (const note of suggestions) {
+      if (
+        note.start > t1 ||
+        note.start + note.duration < t0 ||
+        note.pitch > topPitch ||
+        note.pitch < bottomPitch
+      ) {
+        continue;
+      }
+      const x = timeToX(note.start);
+      const y = pitchToY(note.pitch);
+      const w = Math.max(2, note.duration * zoom);
+      ctx.beginPath();
+      ctx.roundRect(x + 0.5, y + 0.5, w - 1, semitoneHeight - 1, 3);
+      ctx.fillStyle = "rgba(250, 204, 21, 0.18)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(253, 224, 71, 0.9)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
 
     // Notes
     ctx.font = "10px 'Geist Variable', sans-serif";
@@ -482,6 +511,17 @@ export function PianoRoll(props: PianoRollProps) {
   const snap = (time: number, e: React.PointerEvent) =>
     e.shiftKey ? time : snapTime(propsRef.current.grid, time);
 
+  const hitSuggestion = (x: number, y: number) => {
+    const { timeToX, pitchToY } = geometry();
+    const { suggestions, semitoneHeight, zoom } = propsRef.current;
+    return suggestions.findIndex((note) => {
+      const nx = timeToX(note.start);
+      const ny = pitchToY(note.pitch);
+      const w = Math.max(2, note.duration * zoom);
+      return x >= nx && x <= nx + w && y >= ny && y < ny + semitoneHeight;
+    });
+  };
+
   const updateNote = (id: number, update: (note: Note) => Note) => {
     const { setNotes, checkpoint } = propsRef.current;
     const drag = dragRef.current;
@@ -497,8 +537,15 @@ export function PianoRoll(props: PianoRollProps) {
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const { x, y } = pointerPosition(e);
     const { xToTime, yToPitch } = geometry();
-    const { player, onSelect, setNotes, checkpoint, duration } =
-      propsRef.current;
+    const {
+      player,
+      onSelect,
+      setNotes,
+      checkpoint,
+      duration,
+      suggestions,
+      onAcceptSuggestion,
+    } = propsRef.current;
     const time = Math.max(0, Math.min(duration, xToTime(x)));
 
     if (y < RULER_HEIGHT) {
@@ -554,6 +601,15 @@ export function PianoRoll(props: PianoRollProps) {
       return;
     }
 
+    // Clicking a suggestion accepts it
+    const suggestion = hitSuggestion(x, y);
+    if (suggestion >= 0) {
+      const id = onAcceptSuggestion(suggestion);
+      onSelect(id);
+      player.preview(suggestions[suggestion].pitch);
+      return;
+    }
+
     checkpoint();
     const note = createNote({
       pitch,
@@ -598,7 +654,9 @@ export function PianoRoll(props: PianoRollProps) {
             ? "ew-resize"
             : hit
               ? "grab"
-              : "crosshair";
+              : inArea && hitSuggestion(x, y) >= 0
+                ? "copy"
+                : "crosshair";
       requestDraw();
       return;
     }
