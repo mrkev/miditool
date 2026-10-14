@@ -6,6 +6,7 @@ import {
   Redo2Icon,
   Trash2Icon,
   Undo2Icon,
+  UploadIcon,
 } from "lucide-react";
 import {
   useEffect,
@@ -24,9 +25,14 @@ import { renderSpectrogram } from "./colormap";
 import { DEFAULT_GRID, type Grid } from "./grid";
 import { GridControls } from "./GridControls";
 import { useNoteHistory } from "./history";
-import { noteName, notesToMidi } from "./notes";
+import { createNote, midiToNotes, noteName, notesToMidi } from "./notes";
 import { PianoRoll, type HoverInfo } from "./PianoRoll";
 import { Player } from "./player";
+import {
+  loadSession,
+  saveSession,
+  sessionKey as getSessionKey,
+} from "./session";
 import {
   MAX_NOTE,
   midiToFrequency,
@@ -90,8 +96,12 @@ export function TranscribeTool() {
     notesRef.current = notes;
   });
   const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [sessionKey, setSessionKey] = useState<string | null>(null);
+  /** Short-lived status message shown in the footer */
+  const [notice, setNotice] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const midiInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const playing = useSyncExternalStore(
@@ -129,6 +139,24 @@ export function TranscribeTool() {
     player?.setAudioVolume(mix.includes("audio") ? 1 : 0);
     player?.setNotesVolume(mix.includes("notes") ? 1 : 0);
   }, [player, mix]);
+
+  // Autosave, debounced, flushing when the page is hidden
+  useEffect(() => {
+    if (sessionKey == null) return;
+    const save = () => saveSession(sessionKey, { notes, grid });
+    const timeout = setTimeout(save, 300);
+    window.addEventListener("pagehide", save);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener("pagehide", save);
+    };
+  }, [sessionKey, notes, grid]);
+
+  useEffect(() => {
+    if (notice == null) return;
+    const timeout = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timeout);
+  }, [notice]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -183,9 +211,20 @@ export function TranscribeTool() {
     setFileName(file.name);
     setError(null);
     setSpectrogram(null);
-    reset();
     setSelectedId(null);
     setProgress(0);
+
+    // Restore the last transcription of this file
+    const key = getSessionKey(file);
+    const saved = loadSession(key);
+    reset(saved?.notes.map(createNote) ?? []);
+    setGrid(saved?.grid ?? DEFAULT_GRID);
+    setSessionKey(key);
+    setNotice(
+      saved?.notes.length
+        ? `Restored ${saved.notes.length} notes from last time`
+        : null,
+    );
 
     try {
       const buffer = await p.ctx.decodeAudioData(await file.arrayBuffer());
@@ -209,6 +248,33 @@ export function TranscribeTool() {
       );
     } finally {
       if (!abort.signal.aborted) setProgress(null);
+    }
+  };
+
+  const importMidi = async (file: File) => {
+    try {
+      const imported = midiToNotes(new Uint8Array(await file.arrayBuffer()));
+      // Tick 0 goes at bar 1 when there's a grid
+      const offset = grid.enabled ? grid.offset : 0;
+      commit(() =>
+        imported.notes.map((note) =>
+          createNote({ ...note, start: note.start + offset }),
+        ),
+      );
+      setSelectedId(null);
+      if (!grid.enabled && imported.bpm != null) {
+        setGrid({
+          ...grid,
+          enabled: true,
+          bpm: imported.bpm,
+          beatsPerBar: imported.beatsPerBar ?? grid.beatsPerBar,
+          offset: 0,
+        });
+      }
+      setNotice(`Imported ${imported.notes.length} notes from ${file.name}`);
+    } catch (err) {
+      console.error(err);
+      setNotice(`Couldn't read ${file.name} as a MIDI file`);
     }
   };
 
@@ -242,6 +308,20 @@ export function TranscribeTool() {
     />
   );
 
+  const midiInput = (
+    <input
+      ref={midiInputRef}
+      type="file"
+      accept=".mid,.midi,audio/midi"
+      className="hidden"
+      onChange={(e) => {
+        const file = e.target.files?.[0];
+        if (file) void importMidi(file);
+        e.target.value = "";
+      }}
+    />
+  );
+
   const openButton = (
     <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
       <FileAudioIcon data-icon="inline-start" />
@@ -265,10 +345,16 @@ export function TranscribeTool() {
         e.preventDefault();
         setDragging(false);
         const file = e.dataTransfer.files[0];
-        if (file) void loadFile(file);
+        if (file == null) return;
+        if (/\.midi?$/i.test(file.name)) {
+          if (spectrogram != null) void importMidi(file);
+        } else {
+          void loadFile(file);
+        }
       }}
     >
       {fileInput}
+      {midiInput}
 
       {spectrogram == null || image == null || player == null ? (
         <div
@@ -405,6 +491,13 @@ export function TranscribeTool() {
               >
                 <Trash2Icon />
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => midiInputRef.current?.click()}
+              >
+                <UploadIcon data-icon="inline-start" />
+                Import MIDI
+              </Button>
               <Button disabled={notes.length === 0} onClick={exportMidi}>
                 <DownloadIcon data-icon="inline-start" />
                 Export MIDI
@@ -438,7 +531,8 @@ export function TranscribeTool() {
                   (Number.isNaN(hover.time)
                     ? ""
                     : ` · ${formatTime(hover.time)}`)
-                : `${notes.length} note${notes.length === 1 ? "" : "s"}`}
+                : (notice ??
+                  `${notes.length} note${notes.length === 1 ? "" : "s"} · saved in this browser`)}
             </span>
             <span>
               Drag to draw · drag a note to move, its edge to resize · ↑↓ to

@@ -15,7 +15,8 @@ type Action =
   | { type: "commit"; update?: (notes: Note[]) => Note[] }
   | { type: "undo" }
   | { type: "redo" }
-  | { type: "reset" };
+  /** Replace the notes and clear the history */
+  | { type: "reset"; notes: Note[] };
 
 function reducer(state: History, action: Action): History {
   switch (action.type) {
@@ -42,7 +43,7 @@ function reducer(state: History, action: Action): History {
         future: state.future.slice(1),
       };
     case "reset":
-      return { notes: [], past: [], future: [] };
+      return { notes: action.notes, past: [], future: [] };
   }
 }
 
@@ -69,7 +70,7 @@ export function useNoteHistory() {
         dispatch({ type: "commit", update }),
       undo: () => dispatch({ type: "undo" }),
       redo: () => dispatch({ type: "redo" }),
-      reset: () => dispatch({ type: "reset" }),
+      reset: (notes: Note[] = []) => dispatch({ type: "reset", notes }),
     }),
     [setNotes],
   );

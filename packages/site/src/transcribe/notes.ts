@@ -1,4 +1,4 @@
-import { writeMidi, type MidiEvent } from "midi-file";
+import { parseMidi, writeMidi, type MidiEvent } from "midi-file";
 import type { Grid } from "./grid";
 
 export interface Note {
@@ -108,4 +108,108 @@ export function notesToMidi(notes: Note[], grid?: Grid): Uint8Array {
       tracks: [track],
     }),
   );
+}
+
+export interface ImportedMidi {
+  notes: Omit<Note, "id">[];
+  /** Initial tempo, if the file sets one */
+  bpm: number | null;
+  /** Initial time signature numerator, if the file sets one */
+  beatsPerBar: number | null;
+}
+
+/** Reads the notes from all tracks of a MIDI file, timed in seconds */
+export function midiToNotes(bytes: Uint8Array): ImportedMidi {
+  const { header, tracks } = parseMidi(bytes);
+
+  // Absolute ticks for every event
+  const timed = tracks.flatMap((track) => {
+    let tick = 0;
+    return track.map((event) => {
+      tick += event.deltaTime;
+      return { tick, event };
+    });
+  });
+
+  let toSeconds: (tick: number) => number;
+  let bpm: number | null = null;
+  if (header.ticksPerBeat != null) {
+    // Integrate the tempo map
+    const tempos = timed
+      .flatMap(({ tick, event }) =>
+        event.type === "setTempo"
+          ? [
+              {
+                tick,
+                secondsPerTick:
+                  event.microsecondsPerBeat / 1e6 / header.ticksPerBeat!,
+              },
+            ]
+          : [],
+      )
+      .sort((a, b) => a.tick - b.tick);
+    if (tempos.length > 0) {
+      bpm =
+        Math.round(
+          (60 / (tempos[0].secondsPerTick * header.ticksPerBeat)) * 100,
+        ) / 100;
+    }
+    const segments: {
+      tick: number;
+      seconds: number;
+      secondsPerTick: number;
+    }[] = [{ tick: 0, seconds: 0, secondsPerTick: 0.5 / header.ticksPerBeat }];
+    for (const { tick, secondsPerTick } of tempos) {
+      const last = segments[segments.length - 1];
+      segments.push({
+        tick,
+        seconds: last.seconds + (tick - last.tick) * last.secondsPerTick,
+        secondsPerTick,
+      });
+    }
+    toSeconds = (tick) => {
+      let segment = segments[0];
+      for (const s of segments) {
+        if (s.tick > tick) break;
+        segment = s;
+      }
+      return segment.seconds + (tick - segment.tick) * segment.secondsPerTick;
+    };
+  } else {
+    // SMPTE timing
+    const ticksPerSecond =
+      (header.framesPerSecond ?? 30) * (header.ticksPerFrame ?? 80);
+    toSeconds = (tick) => tick / ticksPerSecond;
+  }
+
+  const timeSignature = timed.find(
+    ({ event }) => event.type === "timeSignature",
+  );
+  const beatsPerBar =
+    timeSignature?.event.type === "timeSignature"
+      ? timeSignature.event.numerator
+      : null;
+
+  // Pair note-ons with note-offs, per channel and pitch
+  const open = new Map<string, number[]>();
+  const notes: Omit<Note, "id">[] = [];
+  for (const { tick, event } of timed.sort((a, b) => a.tick - b.tick)) {
+    if (event.type !== "noteOn" && event.type !== "noteOff") continue;
+    const key = `${event.channel}:${event.noteNumber}`;
+    if (event.type === "noteOn" && event.velocity > 0) {
+      open.set(key, [...(open.get(key) ?? []), tick]);
+    } else {
+      const starts = open.get(key);
+      const start = starts?.shift();
+      if (start == null) continue;
+      const startSeconds = toSeconds(start);
+      notes.push({
+        pitch: event.noteNumber,
+        start: startSeconds,
+        duration: Math.max(0.02, toSeconds(tick) - startSeconds),
+      });
+    }
+  }
+
+  return { notes, bpm, beatsPerBar };
 }
