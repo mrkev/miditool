@@ -9,11 +9,26 @@ export interface Note {
   start: number;
   /** Seconds */
   duration: number;
+  /** MIDI velocity, 1 to 127 */
+  velocity: number;
+}
+
+export const DEFAULT_VELOCITY = 100;
+
+/** Fields for a new note; velocity defaults to `DEFAULT_VELOCITY` */
+export type NoteInput = Omit<Note, "id" | "velocity"> & { velocity?: number };
+
+export function clampVelocity(velocity: number) {
+  return Math.min(127, Math.max(1, Math.round(velocity)));
 }
 
 let nextId = 1;
-export function createNote(fields: Omit<Note, "id">): Note {
-  return { id: nextId++, ...fields };
+export function createNote({ velocity, ...fields }: NoteInput): Note {
+  return {
+    id: nextId++,
+    ...fields,
+    velocity: clampVelocity(velocity ?? DEFAULT_VELOCITY),
+  };
 }
 
 const NOTE_NAMES = [
@@ -96,7 +111,7 @@ export function notesToMidi(notes: Note[], grid?: Grid): Uint8Array {
       channel: 0,
       type: on ? "noteOn" : "noteOff",
       noteNumber: note.pitch,
-      velocity: on ? 100 : 0,
+      velocity: on ? note.velocity : 0,
     });
     lastTick = tick;
   }
@@ -191,22 +206,25 @@ export function midiToNotes(bytes: Uint8Array): ImportedMidi {
       : null;
 
   // Pair note-ons with note-offs, per channel and pitch
-  const open = new Map<string, number[]>();
+  const open = new Map<string, { tick: number; velocity: number }[]>();
   const notes: Omit<Note, "id">[] = [];
   for (const { tick, event } of timed.sort((a, b) => a.tick - b.tick)) {
     if (event.type !== "noteOn" && event.type !== "noteOff") continue;
     const key = `${event.channel}:${event.noteNumber}`;
     if (event.type === "noteOn" && event.velocity > 0) {
-      open.set(key, [...(open.get(key) ?? []), tick]);
+      open.set(key, [
+        ...(open.get(key) ?? []),
+        { tick, velocity: event.velocity },
+      ]);
     } else {
-      const starts = open.get(key);
-      const start = starts?.shift();
-      if (start == null) continue;
-      const startSeconds = toSeconds(start);
+      const noteOn = open.get(key)?.shift();
+      if (noteOn == null) continue;
+      const startSeconds = toSeconds(noteOn.tick);
       notes.push({
         pitch: event.noteNumber,
         start: startSeconds,
         duration: Math.max(0.02, toSeconds(tick) - startSeconds),
+        velocity: noteOn.velocity,
       });
     }
   }

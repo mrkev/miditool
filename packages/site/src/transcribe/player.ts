@@ -1,4 +1,4 @@
-import { type Note } from "./notes";
+import { DEFAULT_VELOCITY, type Note } from "./notes";
 import { midiToFrequency } from "./spectrogram";
 
 /** Synth level at full volume, roughly matching typical recordings */
@@ -135,20 +135,22 @@ export class Player {
   }
 
   /** Plays a short preview of a pitch */
-  preview(pitch: number, duration = 0.3) {
+  preview(pitch: number, duration = 0.3, velocity = DEFAULT_VELOCITY) {
     void this.ctx.resume();
     const now = this.ctx.currentTime;
-    this.voice(pitch, now, now + duration);
+    this.voice(pitch, velocity, now, now + duration);
   }
 
-  private voice(pitch: number, start: number, end: number) {
+  private voice(pitch: number, velocity: number, start: number, end: number) {
     const osc = this.ctx.createOscillator();
     const env = this.ctx.createGain();
+    // Roughly how velocity maps to loudness on most instruments
+    const peak = Math.pow(velocity / 127, 1.5);
     osc.type = "triangle";
     osc.frequency.value = midiToFrequency(pitch);
     env.gain.setValueAtTime(0, start);
-    env.gain.linearRampToValueAtTime(1, start + 0.005);
-    env.gain.setValueAtTime(1, Math.max(start + 0.005, end - 0.03));
+    env.gain.linearRampToValueAtTime(peak, start + 0.005);
+    env.gain.setValueAtTime(peak, Math.max(start + 0.005, end - 0.03));
     env.gain.linearRampToValueAtTime(0, end);
     osc.connect(env).connect(this.notesGain);
     osc.start(start);
@@ -166,6 +168,7 @@ export class Player {
       const start = Math.max(note.start, now);
       const osc = this.voice(
         note.pitch,
+        note.velocity,
         this.startedAt + start,
         this.startedAt + end,
       );

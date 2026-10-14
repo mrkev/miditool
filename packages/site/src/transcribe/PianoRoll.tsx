@@ -306,9 +306,10 @@ export function PianoRoll(props: PianoRollProps) {
       const selected = note.id === selectedId;
       ctx.beginPath();
       ctx.roundRect(x + 0.5, y + 0.5, w - 1, semitoneHeight - 1, 3);
+      // Louder notes are more opaque
       ctx.fillStyle = selected
         ? "rgba(125, 211, 252, 0.9)"
-        : "rgba(56, 189, 248, 0.55)";
+        : `rgba(56, 189, 248, ${0.2 + 0.6 * (note.velocity / 127)})`;
       ctx.fill();
       ctx.strokeStyle = selected ? "#fff" : "rgba(186, 230, 253, 0.9)";
       ctx.lineWidth = 1;
@@ -580,7 +581,7 @@ export function PianoRoll(props: PianoRollProps) {
     e.currentTarget.setPointerCapture(e.pointerId);
     if (hit) {
       onSelect(hit.note.id);
-      player.preview(hit.note.pitch);
+      player.preview(hit.note.pitch, 0.3, hit.note.velocity);
       dragRef.current = hit.edge
         ? {
             type: "resize",

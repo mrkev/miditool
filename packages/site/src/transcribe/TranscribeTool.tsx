@@ -26,6 +26,7 @@ import { DEFAULT_GRID, snapStep, snapTime, type Grid } from "./grid";
 import { GridControls } from "./GridControls";
 import { useNoteHistory } from "./history";
 import {
+  clampVelocity,
   createNote,
   midiToNotes,
   noteName,
@@ -37,6 +38,7 @@ import { levelToGain, loadMix, saveMix, type Channel, type Mix } from "./mix";
 import { MixControls } from "./MixControls";
 import { Player } from "./player";
 import { SuggestControls } from "./SuggestControls";
+import { ViewControls } from "./ViewControls";
 import { suggestNotes } from "./suggest";
 import {
   loadSession,
@@ -51,10 +53,6 @@ import {
 } from "./spectrogram";
 
 const SEMITONE_HEIGHT = 14;
-
-// Zoom slider is exponential: 0 -> 10px/s, 100 -> 1000px/s
-const sliderToZoom = (v: number) => 10 * Math.pow(100, v / 100);
-const zoomToSlider = (zoom: number) => 50 * Math.log10(zoom / 10);
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -74,6 +72,9 @@ function isInteractive(target: EventTarget | null) {
     ) != null
   );
 }
+
+/** Velocity change for Alt+Up/Down */
+const VELOCITY_STEP = 8;
 
 export function TranscribeTool() {
   const [player, setPlayer] = useState<Player | null>(null);
@@ -101,6 +102,8 @@ export function TranscribeTool() {
     canRedo,
   } = useNoteHistory();
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
+  const editingVelocityRef = useRef(false);
   // For keyboard shortcuts, which run outside React's event system
   const selectedIdRef = useRef(selectedId);
   const notesRef = useRef(notes);
@@ -245,6 +248,16 @@ export function TranscribeTool() {
         e.preventDefault();
         commit((notes) => notes.filter((note) => note.id !== selectedId));
         setSelectedId(null);
+      } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        const step = e.key === "ArrowUp" ? VELOCITY_STEP : -VELOCITY_STEP;
+        commit((notes) =>
+          notes.map((note) =>
+            note.id === selectedId
+              ? { ...note, velocity: clampVelocity(note.velocity + step) }
+              : note,
+          ),
+        );
       } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
         e.preventDefault();
         const step = (e.shiftKey ? 12 : 1) * (e.key === "ArrowUp" ? 1 : -1);
@@ -501,27 +514,46 @@ export function TranscribeTool() {
               onAcceptAll={acceptAllSuggestions}
             />
 
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Zoom
-              <Slider
-                className="data-horizontal:w-28"
-                min={0}
-                max={100}
-                step={0.5}
-                value={[zoomToSlider(zoom)]}
-                onValueChange={(v) => setZoom(sliderToZoom(sliderValue(v)))}
-              />
-            </label>
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              Range
-              <Slider
-                className="data-horizontal:w-28"
-                min={20}
-                max={100}
-                value={[-floorDb]}
-                onValueChange={(v) => setFloorDb(-sliderValue(v))}
-              />
-            </label>
+            {selectedNote && (
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                Velocity
+                <Slider
+                  className="data-horizontal:w-24"
+                  min={1}
+                  max={127}
+                  step={1}
+                  value={[selectedNote.velocity]}
+                  onValueChange={(value) => {
+                    // One undo step per drag
+                    if (!editingVelocityRef.current) {
+                      checkpoint();
+                      editingVelocityRef.current = true;
+                    }
+                    const velocity = sliderValue(value);
+                    setNotes((notes) =>
+                      notes.map((note) =>
+                        note.id === selectedNote.id
+                          ? { ...note, velocity }
+                          : note,
+                      ),
+                    );
+                  }}
+                  onValueCommitted={() => {
+                    editingVelocityRef.current = false;
+                  }}
+                />
+                <span className="w-7 text-foreground tabular-nums">
+                  {selectedNote.velocity}
+                </span>
+              </label>
+            )}
+
+            <ViewControls
+              zoom={zoom}
+              onZoomChange={setZoom}
+              floorDb={floorDb}
+              onFloorDbChange={setFloorDb}
+            />
 
             <div className="ml-auto flex items-center gap-1">
               <Button
@@ -600,9 +632,9 @@ export function TranscribeTool() {
                   `${notes.length} note${notes.length === 1 ? "" : "s"} · saved in this browser`)}
             </span>
             <span>
-              Drag to draw · drag a note to move, its edge to resize · ↑↓ to
-              transpose · Alt-click to delete · Space to play · ⌘/Ctrl+scroll to
-              zoom
+              Drag to draw · drag a note to move, its edge to resize · ↑↓
+              transpose · Alt+↑↓ velocity · Alt-click to delete · Space to play
+              · ⌘/Ctrl+scroll to zoom
             </span>
           </div>
         </>

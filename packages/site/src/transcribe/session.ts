@@ -1,12 +1,12 @@
 import { DEFAULT_GRID, type Grid } from "./grid";
-import type { Note } from "./notes";
+import type { NoteInput } from "./notes";
 
 // Autosaved transcription for each audio file, in localStorage
 
 const PREFIX = "miditool:transcribe:";
 
 export interface Session {
-  notes: Omit<Note, "id">[];
+  notes: NoteInput[];
   grid: Grid;
 }
 
@@ -37,10 +37,11 @@ export function saveSession(key: string, session: Session) {
       localStorage.setItem(
         key,
         JSON.stringify({
-          notes: session.notes.map(({ pitch, start, duration }) => ({
+          notes: session.notes.map(({ pitch, start, duration, velocity }) => ({
             pitch,
             start,
             duration,
+            velocity,
           })),
           grid: session.grid,
         }),

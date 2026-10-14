@@ -1,4 +1,4 @@
-import type { Note } from "./notes";
+import { clampVelocity, type Note } from "./notes";
 import {
   fftSizeForPitch,
   MAX_NOTE,
@@ -39,6 +39,15 @@ const OVERTONES = [2, 3, 4, 5, 6].map((h) => ({
  */
 const ONSET_DB = 6;
 const ONSET_LOOKBACK = 3;
+
+/**
+ * Maps a note's peak level (dB below the loudest point) to a velocity.
+ * Recordings don't say how hard notes were played, so this is a guess
+ * that keeps louder notes louder.
+ */
+function velocityForDb(db: number) {
+  return clampVelocity(Math.max(20, 127 + 1.6 * db));
+}
 
 export interface SuggestOptions {
   /** 0 (only the loudest notes) to 1 (everything plausible) */
@@ -157,10 +166,13 @@ export function suggestNotes(
       if (start >= 0 && t - start >= windowFrames) {
         const startSeconds = start * frameDuration + smear;
         const endSeconds = t * frameDuration - smear;
+        let peakDb = -Infinity;
+        for (let f = start; f < t; f++) peakDb = Math.max(peakDb, db[row + f]);
         notes.push({
           pitch: MIN_NOTE + i,
           start: startSeconds,
           duration: Math.max(MIN_NOTE_SECONDS, endSeconds - startSeconds),
+          velocity: velocityForDb(peakDb),
         });
       }
       start = -1;
