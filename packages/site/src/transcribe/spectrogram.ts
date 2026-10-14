@@ -20,6 +20,8 @@ export interface Spectrogram {
   /** Seconds between frames */
   frameDuration: number;
   sampleRate: number;
+  /** Resolution it was computed at, see `RESOLUTIONS` */
+  binsPerSemitone: number;
   /** Magnitude in dB relative to the loudest bin (<= 0), row-major */
   data: Float32Array;
 }
@@ -36,8 +38,8 @@ export function rowToPitch(row: number) {
 /**
  * Analysis resolutions, like a coarse constant-Q transform. Longer windows
  * resolve low notes, shorter ones keep high notes sharp in time. Each row
- * uses the shortest window whose bins are at least `MIN_BINS_PER_SEMITONE`
- * per semitone at that pitch.
+ * uses the shortest window with at least `binsPerSemitone` FFT bins per
+ * semitone at that pitch.
  *
  * Long windows run on a decimated copy of the signal (low notes don't need
  * the high sample rate), so every band costs at most a 4096-point FFT.
@@ -51,7 +53,17 @@ const BANDS = [
   { decimation: 4, size: 4096 },
 ].map((band) => ({ ...band, window: band.size << band.decimation }));
 type Band = (typeof BANDS)[number];
-const MIN_BINS_PER_SEMITONE = 2;
+
+/**
+ * The time/pitch trade-off: FFT bins per semitone. More bins separate
+ * neighbouring notes better but need longer windows, which blur timing.
+ */
+export const RESOLUTIONS = {
+  timing: 1,
+  balanced: 2,
+  pitch: 3,
+} as const;
+export type Resolution = keyof typeof RESOLUTIONS;
 const MAX_DECIMATION = Math.max(...BANDS.map((band) => band.decimation));
 
 export interface SpectrogramPlan {
@@ -72,20 +84,27 @@ export function planSpectrogram(
   return { hop, width: Math.max(1, Math.ceil(numSamples / hop)) };
 }
 
-function bandForPitch(pitch: number, sampleRate: number): Band {
+function bandForPitch(
+  pitch: number,
+  sampleRate: number,
+  binsPerSemitone: number,
+): Band {
   const semitoneHz =
     midiToFrequency(pitch + 0.5) - midiToFrequency(pitch - 0.5);
   return (
     BANDS.find(
-      (band) =>
-        semitoneHz / (sampleRate / band.window) >= MIN_BINS_PER_SEMITONE,
+      (band) => semitoneHz / (sampleRate / band.window) >= binsPerSemitone,
     ) ?? BANDS[BANDS.length - 1]
   );
 }
 
 /** Analysis window length, in samples, used for rows around `pitch` */
-export function fftSizeForPitch(pitch: number, sampleRate: number) {
-  return bandForPitch(pitch, sampleRate).window;
+export function fftSizeForPitch(
+  pitch: number,
+  sampleRate: number,
+  binsPerSemitone: number,
+) {
+  return bandForPitch(pitch, sampleRate, binsPerSemitone).window;
 }
 
 /**
@@ -147,18 +166,32 @@ function decimate({ data, start }: Level): Level {
   return { data: out, start: outStart };
 }
 
+export interface SpectrogramJob {
+  /** Audio starting at absolute sample `sampleOffset` */
+  samples: Float32Array;
+  sampleOffset: number;
+  sampleRate: number;
+  hop: number;
+  /** Frames to compute, [frameStart, frameEnd) */
+  frameStart: number;
+  frameEnd: number;
+  binsPerSemitone: number;
+}
+
 /**
- * Computes linear magnitudes for frames [frameStart, frameEnd). `samples`
- * holds the audio starting at absolute sample `sampleOffset`. Returns a
- * row-major array `NUM_ROWS` tall and `frameEnd - frameStart` wide.
+ * Computes linear magnitudes for a range of frames. Returns a row-major
+ * array `NUM_ROWS` tall and `frameEnd - frameStart` wide.
  */
 export function computeColumns(
-  samples: Float32Array,
-  sampleOffset: number,
-  sampleRate: number,
-  hop: number,
-  frameStart: number,
-  frameEnd: number,
+  {
+    samples,
+    sampleOffset,
+    sampleRate,
+    hop,
+    frameStart,
+    frameEnd,
+    binsPerSemitone,
+  }: SpectrogramJob,
   onProgress?: (progress: number) => void,
 ): Float32Array {
   const width = frameEnd - frameStart;
@@ -167,7 +200,7 @@ export function computeColumns(
   // Assign each row to a band
   const rowsByBand = new Map<Band, number[]>();
   for (let row = 0; row < NUM_ROWS; row++) {
-    const band = bandForPitch(rowToPitch(row), sampleRate);
+    const band = bandForPitch(rowToPitch(row), sampleRate, binsPerSemitone);
     const rows = rowsByBand.get(band) ?? [];
     rows.push(row);
     rowsByBand.set(band, rows);

@@ -49,6 +49,8 @@ import {
   MAX_NOTE,
   midiToFrequency,
   MIN_NOTE,
+  RESOLUTIONS,
+  type Resolution,
   type Spectrogram,
 } from "./spectrogram";
 
@@ -76,12 +78,37 @@ function isInteractive(target: EventTarget | null) {
 /** Velocity change for Alt+Up/Down */
 const VELOCITY_STEP = 8;
 
+const RESOLUTION_STORAGE_KEY = "miditool:transcribe:resolution";
+
+function loadResolution(): Resolution {
+  try {
+    const saved = localStorage.getItem(RESOLUTION_STORAGE_KEY);
+    if (saved != null && saved in RESOLUTIONS) return saved as Resolution;
+  } catch {
+    // Fall back to the default
+  }
+  return "balanced";
+}
+
+function saveResolution(resolution: Resolution) {
+  try {
+    localStorage.setItem(RESOLUTION_STORAGE_KEY, resolution);
+  } catch {
+    // Remembering the resolution is a convenience
+  }
+}
+
 export function TranscribeTool() {
   const [player, setPlayer] = useState<Player | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [spectrogram, setSpectrogram] = useState<Spectrogram | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
+  const [resolution, setResolution] = useState<Resolution>(loadResolution);
+  /** Decoded audio, kept to re-analyze at another resolution */
+  const audioRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [floorDb, setFloorDb] = useState(-70);
   const [zoom, setZoom] = useState(150);
@@ -278,10 +305,45 @@ export function TranscribeTool() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [spectrogram, player, commit, undo, redo]);
 
-  const loadFile = async (file: File) => {
+  /** Cancels any analysis in progress and returns a signal for a new one */
+  const startTask = () => {
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
+    return abort.signal;
+  };
+
+  const runAnalysis = async (resolution: Resolution, signal: AbortSignal) => {
+    const audio = audioRef.current;
+    if (audio == null) return;
+    setProgress(0);
+    try {
+      const result = await analyze(
+        audio.samples,
+        audio.sampleRate,
+        RESOLUTIONS[resolution],
+        setProgress,
+        signal,
+      );
+      setSpectrogram(result);
+    } finally {
+      if (!signal.aborted) setProgress(null);
+    }
+  };
+
+  const changeResolution = (next: Resolution) => {
+    setResolution(next);
+    saveResolution(next);
+    runAnalysis(next, startTask()).catch((err) => {
+      if (err?.name === "AbortError") return;
+      console.error(err);
+      setNotice(`Couldn't re-analyze: ${String(err)}`);
+    });
+  };
+
+  const loadFile = async (file: File) => {
+    const signal = startTask();
+    audioRef.current = null;
 
     const p = player ?? new Player();
     if (player == null) setPlayer(p);
@@ -307,18 +369,16 @@ export function TranscribeTool() {
 
     try {
       const buffer = await p.ctx.decodeAudioData(await file.arrayBuffer());
-      if (abort.signal.aborted) return;
+      if (signal.aborted) return;
       p.load(buffer);
       setDuration(buffer.duration);
-      const result = await analyze(
-        toMono(buffer),
-        buffer.sampleRate,
-        setProgress,
-        abort.signal,
-      );
-      setSpectrogram(result);
+      audioRef.current = {
+        samples: toMono(buffer),
+        sampleRate: buffer.sampleRate,
+      };
+      await runAnalysis(resolution, signal);
     } catch (err) {
-      if (abort.signal.aborted) return;
+      if (signal.aborted) return;
       console.error(err);
       setError(
         err instanceof DOMException && err.name === "EncodingError"
@@ -326,7 +386,7 @@ export function TranscribeTool() {
           : `Couldn't analyze that file: ${String(err)}`,
       );
     } finally {
-      if (!abort.signal.aborted) setProgress(null);
+      if (!signal.aborted) setProgress(null);
     }
   };
 
@@ -549,6 +609,9 @@ export function TranscribeTool() {
             )}
 
             <ViewControls
+              resolution={resolution}
+              onResolutionChange={changeResolution}
+              analyzing={progress != null}
               zoom={zoom}
               onZoomChange={setZoom}
               floorDb={floorDb}
@@ -628,8 +691,10 @@ export function TranscribeTool() {
                   (Number.isNaN(hover.time)
                     ? ""
                     : ` · ${formatTime(hover.time)}`)
-                : (notice ??
-                  `${notes.length} note${notes.length === 1 ? "" : "s"} · saved in this browser`)}
+                : progress != null
+                  ? `Re-analyzing… ${Math.round(progress * 100)}%`
+                  : (notice ??
+                    `${notes.length} note${notes.length === 1 ? "" : "s"} · saved in this browser`)}
             </span>
             <span>
               Drag to draw · drag a note to move, its edge to resize · ↑↓

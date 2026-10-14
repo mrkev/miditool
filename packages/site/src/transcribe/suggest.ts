@@ -58,7 +58,8 @@ export function suggestNotes(
   spectrogram: Spectrogram,
   { sensitivity }: SuggestOptions,
 ): Omit<Note, "id">[] {
-  const { width, data, frameDuration, sampleRate } = spectrogram;
+  const { width, data, frameDuration, sampleRate, binsPerSemitone } =
+    spectrogram;
   // Pitch must be within this many dB of the loudest point overall...
   const floorDb = -35 - 30 * sensitivity;
   // ...and of the most salient pitch in its frame
@@ -153,7 +154,7 @@ export function suggestNotes(
       2;
 
     const windowSeconds =
-      fftSizeForPitch(MIN_NOTE + i, sampleRate) / sampleRate;
+      fftSizeForPitch(MIN_NOTE + i, sampleRate, binsPerSemitone) / sampleRate;
     const smear = WINDOW_SMEAR * windowSeconds;
     // A note's energy is smeared over at least a whole window, so shorter
     // detections are noise, and its attack ramp isn't a re-attack

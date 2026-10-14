@@ -9,6 +9,14 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { Resolution } from "./spectrogram";
+
+const RESOLUTION_OPTIONS: { value: Resolution; label: string }[] = [
+  { value: "timing", label: "Timing" },
+  { value: "balanced", label: "Balanced" },
+  { value: "pitch", label: "Pitch" },
+];
 
 // Zoom slider is exponential: 0 -> 10px/s, 100 -> 1000px/s
 const sliderToZoom = (v: number) => 10 * Math.pow(100, v / 100);
@@ -19,11 +27,18 @@ function sliderValue(value: number | readonly number[]) {
 }
 
 export function ViewControls({
+  resolution,
+  onResolutionChange,
+  analyzing,
   zoom,
   onZoomChange,
   floorDb,
   onFloorDbChange,
 }: {
+  resolution: Resolution;
+  onResolutionChange: (resolution: Resolution) => void;
+  /** Whether an analysis is running */
+  analyzing: boolean;
   /** Pixels per second */
   zoom: number;
   onZoomChange: (zoom: number) => void;
@@ -41,6 +56,41 @@ export function ViewControls({
         <PopoverHeader>
           <PopoverTitle>View</PopoverTitle>
         </PopoverHeader>
+
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <Label>Sharpness</Label>
+            {analyzing && (
+              <span className="text-xs text-muted-foreground">Analyzing…</span>
+            )}
+          </div>
+          <ToggleGroup
+            variant="outline"
+            size="sm"
+            spacing={0}
+            className="w-full"
+            value={[resolution]}
+            onValueChange={(value) => {
+              // Keep one option selected at all times
+              if (value.length > 0) onResolutionChange(value[0] as Resolution);
+            }}
+            aria-label="Sharpness"
+          >
+            {RESOLUTION_OPTIONS.map((option) => (
+              <ToggleGroupItem
+                key={option.value}
+                value={option.value}
+                className="flex-1"
+              >
+                {option.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <p className="text-xs text-muted-foreground">
+            Sharper timing blurs pitch, especially for low notes, and the other
+            way round.
+          </p>
+        </div>
 
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">

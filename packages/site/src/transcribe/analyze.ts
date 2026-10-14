@@ -4,11 +4,9 @@ import {
   planSpectrogram,
   toDecibels,
   type Spectrogram,
+  type SpectrogramJob,
 } from "./spectrogram";
-import type {
-  SpectrogramJob,
-  SpectrogramWorkerMessage,
-} from "./spectrogram.worker";
+import type { SpectrogramWorkerMessage } from "./spectrogram.worker";
 
 /** Mixes an AudioBuffer down to mono */
 export function toMono(buffer: AudioBuffer): Float32Array {
@@ -29,6 +27,7 @@ export function toMono(buffer: AudioBuffer): Float32Array {
 export async function analyze(
   samples: Float32Array,
   sampleRate: number,
+  binsPerSemitone: number,
   onProgress: (progress: number) => void,
   signal: AbortSignal,
 ): Promise<Spectrogram> {
@@ -84,6 +83,7 @@ export async function analyze(
               hop,
               frameStart,
               frameEnd,
+              binsPerSemitone,
             } satisfies SpectrogramJob);
           }),
       ),
@@ -108,6 +108,7 @@ export async function analyze(
       height: NUM_ROWS,
       frameDuration: hop / sampleRate,
       sampleRate,
+      binsPerSemitone,
       data,
     };
   } finally {
