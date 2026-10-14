@@ -146,15 +146,15 @@ export function suggestNotes(
     const windowSeconds =
       fftSizeForPitch(MIN_NOTE + i, sampleRate) / sampleRate;
     const smear = WINDOW_SMEAR * windowSeconds;
-    // A note's attack ramps up over a whole window; don't mistake that for
-    // a re-attack
-    const minAttackFrames = Math.max(
+    // A note's energy is smeared over at least a whole window, so shorter
+    // detections are noise, and its attack ramp isn't a re-attack
+    const windowFrames = Math.max(
       minFrames,
       Math.ceil(windowSeconds / frameDuration),
     );
     let start = -1;
     const end = (t: number) => {
-      if (start >= 0 && t - start >= minFrames) {
+      if (start >= 0 && t - start >= windowFrames) {
         const startSeconds = start * frameDuration + smear;
         const endSeconds = t * frameDuration - smear;
         notes.push({
@@ -177,7 +177,7 @@ export function suggestNotes(
       }
       // Split repeated notes on a re-attack
       if (
-        t - start >= minAttackFrames &&
+        t - start >= windowFrames &&
         rise(i, t) - neighbourRise(i, t) > ONSET_DB
       ) {
         end(t);

@@ -34,12 +34,25 @@ export function rowToPitch(row: number) {
 }
 
 /**
- * Bigger FFTs resolve low notes, smaller ones keep high notes sharp in time.
- * Each row uses the smallest FFT whose bins are at most `binsPerSemitone`
- * times narrower than a semitone at that pitch.
+ * Analysis resolutions, like a coarse constant-Q transform. Longer windows
+ * resolve low notes, shorter ones keep high notes sharp in time. Each row
+ * uses the shortest window whose bins are at least `MIN_BINS_PER_SEMITONE`
+ * per semitone at that pitch.
+ *
+ * Long windows run on a decimated copy of the signal (low notes don't need
+ * the high sample rate), so every band costs at most a 4096-point FFT.
  */
-const FFT_SIZES = [2048, 4096, 8192, 16384] as const;
+const BANDS = [
+  { decimation: 0, size: 2048 },
+  { decimation: 0, size: 4096 },
+  { decimation: 1, size: 4096 },
+  { decimation: 2, size: 4096 },
+  { decimation: 3, size: 4096 },
+  { decimation: 4, size: 4096 },
+].map((band) => ({ ...band, window: band.size << band.decimation }));
+type Band = (typeof BANDS)[number];
 const MIN_BINS_PER_SEMITONE = 2;
+const MAX_DECIMATION = Math.max(...BANDS.map((band) => band.decimation));
 
 export interface SpectrogramPlan {
   /** Samples between frames */
@@ -59,19 +72,80 @@ export function planSpectrogram(
   return { hop, width: Math.max(1, Math.ceil(numSamples / hop)) };
 }
 
-/** FFT size (window length in samples) used for rows around `pitch` */
-export function fftSizeForPitch(pitch: number, sampleRate: number) {
+function bandForPitch(pitch: number, sampleRate: number): Band {
   const semitoneHz =
     midiToFrequency(pitch + 0.5) - midiToFrequency(pitch - 0.5);
   return (
-    FFT_SIZES.find(
-      (size) => semitoneHz / (sampleRate / size) >= MIN_BINS_PER_SEMITONE,
-    ) ?? FFT_SIZES[FFT_SIZES.length - 1]
+    BANDS.find(
+      (band) =>
+        semitoneHz / (sampleRate / band.window) >= MIN_BINS_PER_SEMITONE,
+    ) ?? BANDS[BANDS.length - 1]
   );
 }
 
+/** Analysis window length, in samples, used for rows around `pitch` */
+export function fftSizeForPitch(pitch: number, sampleRate: number) {
+  return bandForPitch(pitch, sampleRate).window;
+}
+
+/**
+ * Lowpass FIR used before each 2x decimation: windowed sinc (Blackman)
+ * cutting off at 0.2 cycles/sample, below the new Nyquist of 0.25.
+ */
+const DECIMATION_FILTER = (() => {
+  const taps = 31;
+  const cutoff = 0.2;
+  const h = new Float32Array(taps);
+  const mid = (taps - 1) / 2;
+  let sum = 0;
+  for (let i = 0; i < taps; i++) {
+    const x = i - mid;
+    const sinc =
+      x === 0 ? 2 * cutoff : Math.sin(2 * Math.PI * cutoff * x) / (Math.PI * x);
+    const blackman =
+      0.42 -
+      0.5 * Math.cos((2 * Math.PI * i) / (taps - 1)) +
+      0.08 * Math.cos((4 * Math.PI * i) / (taps - 1));
+    h[i] = sinc * blackman;
+    sum += h[i];
+  }
+  // Unity gain at DC, so levels match across bands
+  return h.map((v) => v / sum);
+})();
+
 /** Samples on each side of a frame's center that computing it reads */
-export const MAX_FFT_HALF = FFT_SIZES[FFT_SIZES.length - 1] / 2;
+export const MAX_FFT_HALF =
+  Math.max(...BANDS.map((band) => band.window)) / 2 +
+  // Filter support accumulated over the decimation stages
+  (DECIMATION_FILTER.length << MAX_DECIMATION);
+
+/** A signal at some decimation level; `start` is its first sample's index */
+interface Level {
+  data: Float32Array;
+  start: number;
+}
+
+/**
+ * Lowpass filters and halves the sample rate. Sample j of the result sits
+ * at sample 2j of the input, so levels stay aligned to absolute positions.
+ */
+function decimate({ data, start }: Level): Level {
+  const h = DECIMATION_FILTER;
+  const mid = (h.length - 1) / 2;
+  const outStart = Math.ceil(start / 2);
+  const outEnd = Math.floor((start + data.length - 1) / 2);
+  const out = new Float32Array(Math.max(0, outEnd - outStart + 1));
+  for (let j = outStart; j <= outEnd; j++) {
+    const center = 2 * j - start;
+    let acc = 0;
+    for (let k = 0; k < h.length; k++) {
+      const i = center + k - mid;
+      if (i >= 0 && i < data.length) acc += h[k] * data[i];
+    }
+    out[j - outStart] = acc;
+  }
+  return { data: out, start: outStart };
+}
 
 /**
  * Computes linear magnitudes for frames [frameStart, frameEnd). `samples`
@@ -90,24 +164,33 @@ export function computeColumns(
   const width = frameEnd - frameStart;
   const data = new Float32Array(width * NUM_ROWS);
 
-  // Assign each row to an FFT size
-  const rowsBySize = new Map<number, number[]>();
+  // Assign each row to a band
+  const rowsByBand = new Map<Band, number[]>();
   for (let row = 0; row < NUM_ROWS; row++) {
-    const size = fftSizeForPitch(rowToPitch(row), sampleRate);
-    const rows = rowsBySize.get(size) ?? [];
+    const band = bandForPitch(rowToPitch(row), sampleRate);
+    const rows = rowsByBand.get(band) ?? [];
     rows.push(row);
-    rowsBySize.set(size, rows);
+    rowsByBand.set(band, rows);
   }
 
-  const totalWork = [...rowsBySize.keys()].reduce((a, size) => a + size, 0);
+  // Decimated copies of the signal, as needed
+  const levels: Level[] = [{ data: samples, start: sampleOffset }];
+  const maxLevel = Math.max(...[...rowsByBand.keys()].map((b) => b.decimation));
+  for (let l = 1; l <= maxLevel; l++) {
+    levels.push(decimate(levels[l - 1]));
+  }
+
+  const totalWork = [...rowsByBand.keys()].reduce((a, b) => a + b.size, 0);
   let doneWork = 0;
 
-  for (const [size, rows] of rowsBySize) {
+  for (const [band, rows] of rowsByBand) {
+    const { size, decimation } = band;
+    const level = levels[decimation];
     const fft = new FFT(size);
     const window = hann(size);
     const re = new Float32Array(size);
     const im = new Float32Array(size);
-    const binHz = sampleRate / size;
+    const binHz = sampleRate / (size << decimation);
 
     // Frequency range (in bins) covered by each row
     const ranges = rows.map((row) => {
@@ -129,10 +212,11 @@ export function computeColumns(
 
     for (let frame = frameStart; frame < frameEnd; frame++) {
       // Frames are centered on frame * hop
-      const offset = frame * hop - size / 2 - sampleOffset;
+      const center = Math.round((frame * hop) / (1 << decimation));
+      const offset = center - size / 2 - level.start;
       for (let i = 0; i < size; i++) {
         const j = offset + i;
-        re[i] = j >= 0 && j < samples.length ? samples[j] * window[i] : 0;
+        re[i] = j >= 0 && j < level.data.length ? level.data[j] * window[i] : 0;
         im[i] = 0;
       }
       fft.transform(re, im);
