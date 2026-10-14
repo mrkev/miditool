@@ -21,6 +21,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { analyze, toMono } from "./analyze";
 import { renderSpectrogram } from "./colormap";
+import { DEFAULT_GRID, type Grid } from "./grid";
+import { GridControls } from "./GridControls";
 import { useNoteHistory } from "./history";
 import { noteName, notesToMidi } from "./notes";
 import { PianoRoll, type HoverInfo } from "./PianoRoll";
@@ -67,6 +69,7 @@ export function TranscribeTool() {
   const [floorDb, setFloorDb] = useState(-70);
   const [zoom, setZoom] = useState(150);
   const [mix, setMix] = useState<string[]>(["audio", "notes"]);
+  const [grid, setGrid] = useState<Grid>(DEFAULT_GRID);
   const {
     notes,
     setNotes,
@@ -210,7 +213,10 @@ export function TranscribeTool() {
   };
 
   const exportMidi = () => {
-    const bytes = notesToMidi([...notes].sort((a, b) => a.start - b.start));
+    const bytes = notesToMidi(
+      [...notes].sort((a, b) => a.start - b.start),
+      grid,
+    );
     const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], {
       type: "audio/midi",
     });
@@ -340,6 +346,12 @@ export function TranscribeTool() {
               <ToggleGroupItem value="notes">Notes</ToggleGroupItem>
             </ToggleGroup>
 
+            <GridControls
+              grid={grid}
+              onChange={setGrid}
+              currentTime={currentTime}
+            />
+
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Zoom
               <Slider
@@ -414,6 +426,7 @@ export function TranscribeTool() {
               zoom={zoom}
               onZoom={setZoom}
               semitoneHeight={SEMITONE_HEIGHT}
+              grid={grid}
               onHover={setHover}
             />
           </div>

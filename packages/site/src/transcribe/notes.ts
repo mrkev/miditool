@@ -1,4 +1,5 @@
 import { writeMidi, type MidiEvent } from "midi-file";
+import type { Grid } from "./grid";
 
 export interface Note {
   id: number;
@@ -39,19 +40,33 @@ export function isBlackKey(pitch: number) {
 }
 
 const TICKS_PER_BEAT = 480;
-const BPM = 120;
-const TICKS_PER_SECOND = (TICKS_PER_BEAT * BPM) / 60;
+const DEFAULT_BPM = 120;
 
-/** Encodes notes as a single-track MIDI file at 120 BPM */
-export function notesToMidi(notes: Note[]): Uint8Array {
+/**
+ * Encodes notes as a single-track MIDI file. With an enabled grid, uses its
+ * tempo and time signature, and lines bar 1 up with a bar line (notes before
+ * it go in pickup bars). Otherwise uses 120 BPM from time 0.
+ */
+export function notesToMidi(notes: Note[], grid?: Grid): Uint8Array {
+  const tempo = grid?.enabled ? grid : null;
+  const bpm = tempo?.bpm ?? DEFAULT_BPM;
+  const beatsPerBar = tempo?.beatsPerBar ?? 4;
+  const offset = tempo?.offset ?? 0;
+  const beat = 60 / bpm;
+  // Whole bars to fit any notes that start before bar 1
+  const earliest = Math.min(offset, ...notes.map((note) => note.start));
+  const pickupBeats =
+    Math.ceil((offset - earliest) / beat / beatsPerBar) * beatsPerBar;
+  const toTick = (time: number) =>
+    Math.max(
+      0,
+      Math.round(((time - offset) / beat + pickupBeats) * TICKS_PER_BEAT),
+    );
+
   const events = notes
     .flatMap((note) => [
-      { tick: Math.round(note.start * TICKS_PER_SECOND), on: true, note },
-      {
-        tick: Math.round((note.start + note.duration) * TICKS_PER_SECOND),
-        on: false,
-        note,
-      },
+      { tick: toTick(note.start), on: true, note },
+      { tick: toTick(note.start + note.duration), on: false, note },
     ])
     // Note-offs first, so back-to-back notes of the same pitch don't cut
     // each other off
@@ -62,7 +77,16 @@ export function notesToMidi(notes: Note[]): Uint8Array {
       deltaTime: 0,
       meta: true,
       type: "setTempo",
-      microsecondsPerBeat: 60_000_000 / BPM,
+      microsecondsPerBeat: Math.round(60_000_000 / bpm),
+    },
+    {
+      deltaTime: 0,
+      meta: true,
+      type: "timeSignature",
+      numerator: beatsPerBar,
+      denominator: 4,
+      metronome: 24,
+      thirtyseconds: 8,
     },
   ];
   let lastTick = 0;

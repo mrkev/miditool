@@ -5,6 +5,14 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  beatDuration,
+  beatToTime,
+  snapStep,
+  snapTime,
+  timeToBeat,
+  type Grid,
+} from "./grid";
 import { createNote, isBlackKey, noteName, type Note } from "./notes";
 import type { Player } from "./player";
 import {
@@ -65,6 +73,7 @@ export interface PianoRollProps {
   onZoom: (zoom: number) => void;
   /** Pixels per semitone */
   semitoneHeight: number;
+  grid: Grid;
   onHover: (info: HoverInfo | null) => void;
 }
 
@@ -139,6 +148,7 @@ export function PianoRoll(props: PianoRollProps) {
       semitoneHeight,
       player,
       duration,
+      grid,
     } = propsRef.current;
     const dpr = window.devicePixelRatio || 1;
     const ctx = canvas.getContext("2d")!;
@@ -191,13 +201,46 @@ export function PianoRoll(props: PianoRollProps) {
       ctx.fillRect(KEYS_WIDTH, y + semitoneHeight - 1, areaWidth, 1);
     }
 
-    // Time grid
+    // Time grid: bars and beats when there's a tempo, otherwise seconds
     const step =
       TIME_STEPS.find((s) => s * zoom >= 70) ??
       TIME_STEPS[TIME_STEPS.length - 1];
-    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-    for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
-      ctx.fillRect(Math.round(timeToX(t)), RULER_HEIGHT, 1, areaHeight);
+    const beatPx = beatDuration(grid) * zoom;
+    const barPx = beatPx * grid.beatsPerBar;
+    // Label every nth bar so labels don't overlap
+    const barLabelEvery = Math.pow(
+      2,
+      Math.max(0, Math.ceil(Math.log2(32 / barPx))),
+    );
+    if (grid.enabled) {
+      const subdivisions = grid.snap > 0 ? grid.snap : 4;
+      const subPx = beatPx / subdivisions;
+      const firstBeat = Math.floor(timeToBeat(grid, t0));
+      const lastBeat = Math.ceil(timeToBeat(grid, t1));
+      for (let beat = firstBeat; beat <= lastBeat; beat++) {
+        const isBar = beat % grid.beatsPerBar === 0;
+        if (isBar || beatPx >= 6) {
+          ctx.fillStyle = isBar
+            ? "rgba(255, 255, 255, 0.28)"
+            : "rgba(255, 255, 255, 0.12)";
+          const x = Math.round(timeToX(beatToTime(grid, beat)));
+          ctx.fillRect(x, RULER_HEIGHT, 1, areaHeight);
+        }
+        if (subPx >= 8) {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+          for (let i = 1; i < subdivisions; i++) {
+            const x = Math.round(
+              timeToX(beatToTime(grid, beat + i / subdivisions)),
+            );
+            ctx.fillRect(x, RULER_HEIGHT, 1, areaHeight);
+          }
+        }
+      }
+    } else {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+      for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+        ctx.fillRect(Math.round(timeToX(t)), RULER_HEIGHT, 1, areaHeight);
+      }
     }
 
     // Past the end of the audio
@@ -275,10 +318,21 @@ export function PianoRoll(props: PianoRollProps) {
     ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
     ctx.fillRect(0, RULER_HEIGHT - 1, width, 1);
     ctx.fillStyle = "#a3a3a3";
-    for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
-      const x = Math.round(timeToX(t));
-      ctx.fillRect(x, RULER_HEIGHT - 6, 1, 5);
-      ctx.fillText(formatRulerTime(t, step), x + 3, RULER_HEIGHT / 2 - 1);
+    if (grid.enabled) {
+      const firstBar = Math.floor(timeToBeat(grid, t0) / grid.beatsPerBar);
+      const lastBar = Math.ceil(timeToBeat(grid, t1) / grid.beatsPerBar);
+      for (let bar = firstBar; bar <= lastBar; bar++) {
+        if (bar % barLabelEvery !== 0) continue;
+        const x = Math.round(timeToX(beatToTime(grid, bar * grid.beatsPerBar)));
+        ctx.fillRect(x, RULER_HEIGHT - 6, 1, 5);
+        ctx.fillText(String(bar + 1), x + 3, RULER_HEIGHT / 2 - 1);
+      }
+    } else {
+      for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+        const x = Math.round(timeToX(t));
+        ctx.fillRect(x, RULER_HEIGHT - 6, 1, 5);
+        ctx.fillText(formatRulerTime(t, step), x + 3, RULER_HEIGHT / 2 - 1);
+      }
     }
 
     // Playhead
@@ -424,6 +478,10 @@ export function PianoRoll(props: PianoRollProps) {
     return null;
   };
 
+  /** Snaps to the grid, unless Shift is held */
+  const snap = (time: number, e: React.PointerEvent) =>
+    e.shiftKey ? time : snapTime(propsRef.current.grid, time);
+
   const updateNote = (id: number, update: (note: Note) => Note) => {
     const { setNotes, checkpoint } = propsRef.current;
     const drag = dragRef.current;
@@ -497,7 +555,11 @@ export function PianoRoll(props: PianoRollProps) {
     }
 
     checkpoint();
-    const note = createNote({ pitch, start: time, duration: MIN_DURATION });
+    const note = createNote({
+      pitch,
+      start: Math.max(0, snap(time, e)),
+      duration: MIN_DURATION,
+    });
     setNotes((notes) => [...notes, note]);
     onSelect(note.id);
     player.preview(pitch);
@@ -550,14 +612,15 @@ export function PianoRoll(props: PianoRollProps) {
         drag.pitch = pitch;
         player.preview(pitch, 0.15);
       }
-      updateNote(drag.id, (note) => ({
-        ...note,
-        pitch,
-        start: Math.max(0, time - drag.grabOffset),
-      }));
+      const start = Math.max(0, snap(time - drag.grabOffset, e));
+      updateNote(drag.id, (note) => ({ ...note, pitch, start }));
     } else {
       canvas.style.cursor = "ew-resize";
-      const duration = Math.max(MIN_DURATION, time - drag.start);
+      const step = e.shiftKey ? null : snapStep(propsRef.current.grid);
+      const duration = Math.max(
+        step ?? MIN_DURATION,
+        snap(time, e) - drag.start,
+      );
       drag.duration = duration;
       updateNote(drag.id, (note) => ({ ...note, duration }));
     }
