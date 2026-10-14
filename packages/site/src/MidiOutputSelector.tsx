@@ -1,4 +1,12 @@
-import React, { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const STORAGE_KEY = "selectedMidiOutputId";
 
@@ -9,9 +17,9 @@ export function MidiOutputSelector({
   selected: MIDIOutput | null;
   onSelect: (output: MIDIOutput | null) => void;
 }) {
-  const [midiAccess, setMidiAccess] = useState<MIDIAccess | null>(null);
   const [outputs, setOutputs] = useState<MIDIOutput[]>([]);
-  const [selectedId, setSelectedId] = useState<string>(selected?.id ?? "");
+  const [unsupported, setUnsupported] = useState(false);
+
   // Request MIDI access and handle device updates
   useEffect(() => {
     let access: MIDIAccess;
@@ -25,6 +33,7 @@ export function MidiOutputSelector({
         access.onstatechange = () => updateOutputs(access);
       } catch (err) {
         console.error("WebMIDI not supported or permission denied", err);
+        setUnsupported(true);
       }
     }
 
@@ -34,13 +43,7 @@ export function MidiOutputSelector({
 
       // Restore saved selection if available
       const savedId = localStorage.getItem(STORAGE_KEY);
-      if (savedId && list.some((o) => o.id === savedId)) {
-        setSelectedId(savedId);
-        const output = list.find((o) => o.id === savedId) || null;
-        onSelect(output);
-      } else {
-        onSelect(null);
-      }
+      onSelect(list.find((o) => o.id === savedId) ?? null);
     }
 
     initMIDI();
@@ -50,40 +53,40 @@ export function MidiOutputSelector({
     };
   }, [onSelect]);
 
-  const handleSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const id = e.target.value;
-    setSelectedId(id);
-    localStorage.setItem(STORAGE_KEY, id);
+  const items = outputs.map((output) => ({
+    value: output.id,
+    label: output.name ?? output.id,
+  }));
 
-    const output = outputs.find((o) => o.id === id) || null;
-    onSelect(output);
-  };
+  const placeholder = unsupported
+    ? "WebMIDI unavailable"
+    : outputs.length === 0
+      ? "No MIDI outputs found"
+      : "Select a MIDI output";
 
   return (
-    <div className="flex flex-col gap-2">
-      <label htmlFor="midiOutput" className="font-medium">
-        MIDI Output:
-      </label>
-
-      <select
-        id="midiOutput"
-        value={selectedId}
-        onChange={handleSelect}
-        className="border rounded p-2"
+    <div className="flex items-center gap-2">
+      <Label htmlFor="midi-output">Output</Label>
+      <Select
+        items={items}
+        value={selected?.id ?? null}
+        onValueChange={(id) => {
+          localStorage.setItem(STORAGE_KEY, id ?? "");
+          onSelect(outputs.find((o) => o.id === id) ?? null);
+        }}
+        disabled={outputs.length === 0}
       >
-        {outputs.length === 0 ? (
-          <option value="">No MIDI outputs found</option>
-        ) : (
-          <>
-            <option value="">Select a MIDI output</option>
-            {outputs.map((output) => (
-              <option key={output.id} value={output.id}>
-                {output.name}
-              </option>
-            ))}
-          </>
-        )}
-      </select>
+        <SelectTrigger id="midi-output" className="w-56">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {items.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

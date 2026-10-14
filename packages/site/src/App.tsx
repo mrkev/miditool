@@ -1,103 +1,142 @@
-import { LinkedSet, useLinkedSet } from "@mrkev/substate/LinkedSet";
-import { useState } from "react";
-import "./App.css";
-import { CamelotChord, camelotToMidi } from "./CamelotChord";
-import CamelotWheel from "./CamelotWheel";
+import { MinusIcon, PlusIcon } from "lucide-react";
+import { useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { ButtonGroup, ButtonGroupText } from "@/components/ui/button-group";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { type CamelotChord, camelotToMidi } from "./CamelotChord";
+import CamelotWheel, { type Notation } from "./CamelotWheel";
 import { getMajorTriad } from "./chords";
 import { MidiOutputSelector } from "./MidiOutputSelector";
 import PianoKeys from "./PianoKeys";
 import { noteoff, noteon } from "./utils/midi";
 
-const highlightedSet = LinkedSet.create<number>(new Set());
+const MIN_OCTAVE = -4;
+const MAX_OCTAVE = 4;
 
 export function App() {
   const [output, setOutput] = useState<MIDIOutput | null>(null);
   const [octave, setOctave] = useState(0);
-  const [logArr, setLogArr] = useState<string[]>([]);
+  const [notation, setNotation] = useState<Notation>("camelot");
   const [highlighted, setHighlighted] = useState<number[]>([]);
-  const linkedSet = useLinkedSet(highlightedSet);
-
-  function log(str: string) {
-    setLogArr((prev) => [str, ...prev]);
-  }
-
-  const sendNote = () => {
-    if (!output) {
-      alert("No MIDI output selected!");
-      return;
-    }
-
-    // Middle C on, then off after 0.5s
-    const NOTE_ON = [0x90, 60, 127];
-    const NOTE_OFF = [0x80, 60, 0];
-    output.send(NOTE_ON);
-    output.send(NOTE_OFF, window.performance.now() + 500);
-  };
+  // Notes currently held by the wheel, so note-offs match the note-ons even
+  // if the octave changes mid-chord
+  const chordNotesRef = useRef<number[]>([]);
 
   const sendChordDown = (chord: CamelotChord) => {
-    if (!output) {
-      alert("No MIDI output selected!");
-      return;
-    }
-
-    const notes = getMajorTriad(camelotToMidi[chord]);
+    const notes = getMajorTriad(camelotToMidi[chord]).map(
+      (note) => note + octave * 12
+    );
+    chordNotesRef.current = notes;
     setHighlighted(notes);
     for (const note of notes) {
-      output.send(noteon(note + octave * 12));
+      output?.send(noteon(note));
     }
-    log("sent");
   };
 
-  const sendChordUp = (chord: CamelotChord) => {
-    if (!output) {
-      alert("No MIDI output selected!");
-      return;
+  const sendChordUp = () => {
+    for (const note of chordNotesRef.current) {
+      output?.send(noteoff(note));
     }
-
-    const notes = getMajorTriad(camelotToMidi[chord]);
-
-    for (const note of notes) {
-      output.send(noteoff(note + octave * 12), window.performance.now());
-    }
-    log("done");
+    chordNotesRef.current = [];
+    setHighlighted([]);
   };
 
   return (
-    <div className="p-4 flex flex-col gap-4">
-      <MidiOutputSelector onSelect={setOutput} selected={output} />
-      <div className="flex flex-row">
-        <button
-          onClick={() => setOctave((prev) => prev - 1)}
-          className="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700"
-        >
-          -
-        </button>
-        [{octave}]
-        <button
-          onClick={() => setOctave((prev) => prev + 1)}
-          className="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700"
-        >
-          +
-        </button>
-      </div>
-      <PianoKeys
-        lowestNote={48 + 5} // C3
-        highestNote={72 + 5} // C5
-        highlightedKeys={highlighted}
-        onKeyDown={(note) => console.log("Key Down:", note)}
-        onKeyUp={(note) => console.log("Key Up:", note)}
-      />
-      <CamelotWheel
-        onChordDown={sendChordDown}
-        onChordUp={sendChordUp}
+    <div className="min-h-svh">
+      <header className="border-b">
+        <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <h1 className="text-base font-semibold">miditool</h1>
+          <MidiOutputSelector onSelect={setOutput} selected={output} />
+        </div>
+      </header>
 
-        // onChordClick={(chord) => {
-        //   console.log("8B (C major):", camelotToMidi[chord]);
-        //   const triad = getMajorTriad(camelotToMidi[chord]);
-        //   sendChord(triad);
-        // }}
-      />
-      {/* <pre>{logArr.join("\n")}</pre> */}
+      <main className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
+        {output == null && (
+          <p className="text-sm text-muted-foreground">
+            Select a MIDI output to send notes. You can still play to preview
+            chords on the keyboard.
+          </p>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Keyboard</CardTitle>
+            <CardAction>
+              <ButtonGroup>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label="Octave down"
+                  disabled={octave <= MIN_OCTAVE}
+                  onClick={() => setOctave((prev) => prev - 1)}
+                >
+                  <MinusIcon />
+                </Button>
+                <ButtonGroupText className="min-w-24 justify-center tabular-nums">
+                  Octave {octave > 0 ? `+${octave}` : octave}
+                </ButtonGroupText>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label="Octave up"
+                  disabled={octave >= MAX_OCTAVE}
+                  onClick={() => setOctave((prev) => prev + 1)}
+                >
+                  <PlusIcon />
+                </Button>
+              </ButtonGroup>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <PianoKeys
+              lowestNote={48 + 5} // F3
+              highestNote={72 + 5} // F5
+              highlightedKeys={highlighted}
+              onKeyDown={(note) => output?.send(noteon(note))}
+              onKeyUp={(note) => output?.send(noteoff(note))}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Camelot wheel</CardTitle>
+            <CardDescription>
+              Press a key to play its triad, drag to move between keys.
+            </CardDescription>
+            <CardAction>
+              <ToggleGroup
+                variant="outline"
+                size="sm"
+                spacing={0}
+                value={[notation]}
+                onValueChange={(value) => {
+                  // Keep one option selected at all times
+                  if (value.length > 0) setNotation(value[0] as Notation);
+                }}
+              >
+                <ToggleGroupItem value="camelot">Camelot</ToggleGroupItem>
+                <ToggleGroupItem value="musical">Musical</ToggleGroupItem>
+              </ToggleGroup>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex justify-center">
+            <CamelotWheel
+              notation={notation}
+              onChordDown={sendChordDown}
+              onChordUp={sendChordUp}
+            />
+          </CardContent>
+        </Card>
+      </main>
     </div>
   );
 }

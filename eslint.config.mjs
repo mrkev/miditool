@@ -23,4 +23,11 @@ export default defineConfig(
       "@typescript-eslint/no-unused-expressions": "off",
     },
   },
+  {
+    // shadcn components export their variants alongside the component
+    files: ["**/components/ui/**"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
 );

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import cn from "classnames";
+import { cn } from "@/lib/utils";
 
 interface PianoKeysProps {
   lowestNote: number;
@@ -18,6 +18,10 @@ const isBlackKey = (midiNote: number): boolean => {
   const scaleDegree = midiNote % 12;
   return [1, 3, 6, 8, 10].includes(scaleDegree);
 };
+
+// Label C keys with their octave, ie. 60 -> "C4"
+const noteLabel = (midiNote: number) =>
+  midiNote % 12 === 0 ? `C${midiNote / 12 - 1}` : null;
 
 const PianoKeys: React.FC<PianoKeysProps> = ({
   lowestNote,
@@ -55,7 +59,7 @@ const PianoKeys: React.FC<PianoKeysProps> = ({
   const blackKeys = allNotes.filter((n) => isBlackKey(n));
 
   return (
-    <div className="relative inline-block select-none">
+    <div className="relative inline-block touch-none select-none">
       {/* White keys */}
       <div className="flex">
         {whiteKeys.map((note) => {
@@ -64,21 +68,17 @@ const PianoKeys: React.FC<PianoKeysProps> = ({
           return (
             <div
               key={note}
-              onMouseDown={() => handleMouseDown(note)}
-              onMouseUp={() => handleMouseUp(note)}
-              onMouseLeave={() => active && handleMouseUp(note)}
+              onPointerDown={() => handleMouseDown(note)}
+              onPointerUp={() => handleMouseUp(note)}
+              onPointerLeave={() => active && handleMouseUp(note)}
               className={cn(
-                `border border-gray-400 text-black`,
-                highlighted ? "bg-yellow-200" : "bg-white",
-                active ? "bg-blue-300" : ""
+                "flex items-end justify-center rounded-b-md border border-r-0 border-neutral-300 bg-white pb-1 text-[10px] text-neutral-400 last:border-r",
+                highlighted && "bg-amber-200",
+                active && "bg-sky-300"
               )}
-              style={{
-                width: WHITE_KEY_WIDTH,
-                height: WHITE_KEY_HEIGHT,
-                boxSizing: "border-box",
-              }}
+              style={{ width: WHITE_KEY_WIDTH, height: WHITE_KEY_HEIGHT }}
             >
-              {note}
+              {noteLabel(note)}
             </div>
           );
         })}
@@ -90,7 +90,7 @@ const PianoKeys: React.FC<PianoKeysProps> = ({
           if (!isBlackKey(note)) return null;
 
           const previousWhites = allNotes
-            .slice(lowestNote - lowestNote, i)
+            .slice(0, i)
             .filter((n) => !isBlackKey(n)).length;
 
           const left = previousWhites * WHITE_KEY_WIDTH - BLACK_KEY_WIDTH / 2;
@@ -102,22 +102,19 @@ const PianoKeys: React.FC<PianoKeysProps> = ({
             <div
               key={note}
               className={cn(
-                `absolute pointer-events-auto`,
-                highlighted ? "bg-yellow-500" : "bg-black",
-                active ? "bg-blue-500" : ""
+                "pointer-events-auto absolute rounded-b bg-neutral-900",
+                highlighted && "bg-amber-500",
+                active && "bg-sky-500"
               )}
-              onMouseDown={() => handleMouseDown(note)}
-              onMouseUp={() => handleMouseUp(note)}
-              onMouseLeave={() => active && handleMouseUp(note)}
+              onPointerDown={() => handleMouseDown(note)}
+              onPointerUp={() => handleMouseUp(note)}
+              onPointerLeave={() => active && handleMouseUp(note)}
               style={{
                 left,
                 width: BLACK_KEY_WIDTH,
                 height: BLACK_KEY_HEIGHT,
-                borderRadius: "0 0 3px 3px",
               }}
-            >
-              {note}
-            </div>
+            />
           );
         })}
       </div>
