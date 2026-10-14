@@ -19,7 +19,6 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { analyze, toMono } from "./analyze";
 import { renderSpectrogram } from "./colormap";
@@ -34,6 +33,8 @@ import {
   type Note,
 } from "./notes";
 import { PianoRoll, type HoverInfo } from "./PianoRoll";
+import { levelToGain, loadMix, saveMix, type Channel, type Mix } from "./mix";
+import { MixControls } from "./MixControls";
 import { Player } from "./player";
 import { SuggestControls } from "./SuggestControls";
 import { suggestNotes } from "./suggest";
@@ -83,7 +84,7 @@ export function TranscribeTool() {
   const [error, setError] = useState<string | null>(null);
   const [floorDb, setFloorDb] = useState(-70);
   const [zoom, setZoom] = useState(150);
-  const [mix, setMix] = useState<string[]>(["audio", "notes"]);
+  const [mix, setMix] = useState<Mix>(loadMix);
   const [grid, setGrid] = useState<Grid>(DEFAULT_GRID);
   const [suggesting, setSuggesting] = useState(false);
   const [sensitivity, setSensitivity] = useState(0.4);
@@ -197,8 +198,11 @@ export function TranscribeTool() {
   useEffect(() => () => player?.dispose(), [player]);
   useEffect(() => player?.setNotes(notes), [player, notes]);
   useEffect(() => {
-    player?.setAudioVolume(mix.includes("audio") ? 1 : 0);
-    player?.setNotesVolume(mix.includes("notes") ? 1 : 0);
+    const gain = (channel: Channel) =>
+      mix.enabled.includes(channel) ? levelToGain(mix.levels[channel]) : 0;
+    player?.setAudioVolume(gain("audio"));
+    player?.setNotesVolume(gain("notes"));
+    saveMix(mix);
   }, [player, mix]);
 
   // Autosave, debounced, flushing when the page is hidden
@@ -481,18 +485,7 @@ export function TranscribeTool() {
               </span>
             </div>
 
-            <ToggleGroup
-              multiple
-              variant="outline"
-              size="sm"
-              spacing={0}
-              value={mix}
-              onValueChange={setMix}
-              aria-label="Playback"
-            >
-              <ToggleGroupItem value="audio">Audio</ToggleGroupItem>
-              <ToggleGroupItem value="notes">Notes</ToggleGroupItem>
-            </ToggleGroup>
+            <MixControls mix={mix} onChange={setMix} />
 
             <GridControls
               grid={grid}

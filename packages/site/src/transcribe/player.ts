@@ -1,6 +1,9 @@
 import { type Note } from "./notes";
 import { midiToFrequency } from "./spectrogram";
 
+/** Synth level at full volume, roughly matching typical recordings */
+const NOTES_GAIN = 0.3;
+
 /**
  * Plays the loaded audio, along with a simple synth voice for each note so
  * the transcription can be compared against the recording.
@@ -24,7 +27,7 @@ export class Player {
   constructor() {
     this.audioGain.connect(this.ctx.destination);
     this.notesGain.connect(this.ctx.destination);
-    this.notesGain.gain.value = 0.15;
+    this.notesGain.gain.value = NOTES_GAIN;
   }
 
   get duration() {
@@ -61,7 +64,7 @@ export class Player {
   }
 
   setNotesVolume(volume: number) {
-    this.notesGain.gain.value = volume * 0.15;
+    this.notesGain.gain.value = volume * NOTES_GAIN;
   }
 
   setNotes(notes: Note[]) {
