@@ -20,6 +20,13 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
@@ -111,6 +118,32 @@ function isControl(target: EventTarget | null) {
 /** Velocity change for Alt+Up/Down */
 const VELOCITY_STEP = 8;
 
+const RATE_STORAGE_KEY = "miditool:transcribe:rate";
+/** Playback speeds offered; slower ones keep their pitch */
+const RATES = [1, 0.9, 0.75, 0.6, 0.5, 0.4, 0.25];
+const RATE_ITEMS = RATES.map((rate) => ({
+  value: rate,
+  label: `${rate}×`,
+}));
+
+function loadRate(): number {
+  try {
+    const saved = Number(localStorage.getItem(RATE_STORAGE_KEY));
+    if (RATES.includes(saved)) return saved;
+  } catch {
+    // Fall back to normal speed
+  }
+  return 1;
+}
+
+function saveRate(rate: number) {
+  try {
+    localStorage.setItem(RATE_STORAGE_KEY, String(rate));
+  } catch {
+    // Remembering the speed is a convenience
+  }
+}
+
 const RESOLUTION_STORAGE_KEY = "miditool:transcribe:resolution";
 
 function loadResolution(): Resolution {
@@ -143,6 +176,7 @@ export function TranscribeTool({
   const [spectrogram, setSpectrogram] = useState<Spectrogram | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [resolution, setResolution] = useState<Resolution>(loadResolution);
+  const [rate, setRate] = useState(loadRate);
   /** Decoded audio, kept to re-analyze at another resolution */
   const audioRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(
     null,
@@ -274,6 +308,10 @@ export function TranscribeTool({
 
   useEffect(() => () => player?.dispose(), [player]);
   useEffect(() => player?.setNotes(notes), [player, notes]);
+  useEffect(() => {
+    player?.setRate(rate);
+    saveRate(rate);
+  }, [player, rate]);
   useEffect(
     () =>
       player?.setMetronome(
@@ -476,7 +514,7 @@ export function TranscribeTool({
     try {
       const buffer = await p.ctx.decodeAudioData(await file.arrayBuffer());
       if (signal.aborted) return;
-      p.load(buffer);
+      p.load({ buffer, file });
       setDuration(buffer.duration);
       void saveLastFile(file);
       audioRef.current = {
@@ -701,6 +739,30 @@ export function TranscribeTool({
                   / {formatTime(duration)}
                 </span>
               </span>
+              <Select
+                items={RATE_ITEMS}
+                value={rate}
+                onValueChange={(value) => setRate(value ?? 1)}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Playback speed"
+                  title="Playback speed (keeps pitch)"
+                  className={cn(
+                    "w-18",
+                    rate !== 1 && "border-primary text-primary",
+                  )}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RATE_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <MixControls mix={mix} onChange={setMix} />

@@ -5,12 +5,26 @@ import { midiToFrequency } from "./spectrogram";
 /** Metronome click level at full volume */
 const METRONOME_GAIN = 0.5;
 
+/** Slow playback re-syncs notes to the media element past this, seconds */
+const MAX_DRIFT = 0.015;
+
 /** Synth level at full volume, roughly matching typical recordings */
 const NOTES_GAIN = 0.3;
+
+export interface LoadedAudio {
+  buffer: AudioBuffer;
+  /** The original file, streamed through a media element for slow playback */
+  file: File;
+}
 
 /**
  * Plays the loaded audio, along with a simple synth voice for each note so
  * the transcription can be compared against the recording.
+ *
+ * At normal speed the audio plays from a buffer, sample-accurately. Slower
+ * speeds play the file through a media element instead, whose built-in
+ * time-stretching keeps the pitch. Song time maps to context time as
+ * `startedAt + time / rate` either way, so notes and clicks follow along.
  */
 export class Player {
   readonly ctx = new AudioContext();
@@ -19,11 +33,19 @@ export class Player {
   private readonly metronomeGain = this.ctx.createGain();
   /** Tempo the metronome clicks to, or null for no metronome */
   private metronome: Grid | null = null;
-  private buffer: AudioBuffer | null = null;
+  private audio: LoadedAudio | null = null;
   private source: AudioBufferSourceNode | null = null;
+  private element: HTMLAudioElement | null = null;
+  private elementSource: MediaElementAudioSourceNode | null = null;
+  private elementUrl: string | null = null;
+  /** Playback speed; 1 is normal */
+  private rate = 1;
   private voices: OscillatorNode[] = [];
   private notes: Note[] = [];
-  /** ctx.currentTime when playback position 0 would have started */
+  /**
+   * ctx.currentTime when playback position 0 would have started, at the
+   * current rate
+   */
   private startedAt = 0;
   /** Position when paused */
   private position = 0;
@@ -40,14 +62,26 @@ export class Player {
   }
 
   get duration() {
-    return this.buffer?.duration ?? 0;
+    return this.audio?.buffer.duration ?? 0;
   }
 
   get currentTime() {
     if (!this.playing) {
       return this.position;
     }
-    return Math.min(this.ctx.currentTime - this.startedAt, this.duration);
+    return Math.min(
+      (this.ctx.currentTime - this.startedAt) * this.rate,
+      this.duration,
+    );
+  }
+
+  get playbackRate() {
+    return this.rate;
+  }
+
+  /** Context time at which song time `time` plays */
+  private toContextTime(time: number) {
+    return this.startedAt + time / this.rate;
   }
 
   subscribe = (listener: () => void) => {
@@ -61,11 +95,63 @@ export class Player {
     this.listeners.forEach((listener) => listener());
   }
 
-  load(buffer: AudioBuffer | null) {
+  load(audio: LoadedAudio | null) {
     this.pause();
-    this.buffer = buffer;
+    this.releaseElement();
+    this.audio = audio;
     this.position = 0;
     this.emit();
+  }
+
+  /** Sets the playback speed, keeping the pitch. Restarts if playing */
+  setRate(rate: number) {
+    if (rate === this.rate) return;
+    const wasPlaying = this.playing;
+    this.pause();
+    this.rate = rate;
+    if (wasPlaying) this.play();
+    else this.emit();
+  }
+
+  /** The media element for slow playback, created on first use */
+  private mediaElement() {
+    if (this.element == null && this.audio != null) {
+      this.elementUrl = URL.createObjectURL(this.audio.file);
+      const element = new Audio(this.elementUrl);
+      element.preservesPitch = true;
+      element.onended = () => {
+        if (this.playing && this.element === element) {
+          this.playing = false;
+          this.position = this.duration;
+          this.stopVoices();
+          this.emit();
+        }
+      };
+      // Keep notes and clicks lined up with the element's own clock
+      element.ontimeupdate = () => {
+        if (!this.playing || this.element !== element || element.paused) {
+          return;
+        }
+        const drift = this.currentTime - element.currentTime;
+        if (Math.abs(drift) > MAX_DRIFT) {
+          this.startedAt += drift / this.rate;
+          this.reschedule();
+        }
+      };
+      this.elementSource = this.ctx.createMediaElementSource(element);
+      this.elementSource.connect(this.audioGain);
+      this.element = element;
+    }
+    return this.element;
+  }
+
+  private releaseElement() {
+    this.element?.pause();
+    this.elementSource?.disconnect();
+    if (this.elementUrl) URL.revokeObjectURL(this.elementUrl);
+    this.element = null;
+    this.elementSource = null;
+    this.elementUrl = null;
   }
 
   setAudioVolume(volume: number) {
@@ -99,13 +185,38 @@ export class Player {
   }
 
   play() {
-    if (this.buffer == null || this.playing) {
+    if (this.audio == null || this.playing) {
       return;
     }
     void this.ctx.resume();
     const from = this.position >= this.duration ? 0 : this.position;
+    this.startedAt = this.ctx.currentTime - from / this.rate;
+    this.playing = true;
+
+    if (this.rate !== 1) {
+      const element = this.mediaElement()!;
+      element.playbackRate = this.rate;
+      element.currentTime = from;
+      element.play().then(
+        () => {
+          if (!this.playing || this.element !== element) return;
+          // Line notes and clicks up with where the element actually is
+          this.startedAt =
+            this.ctx.currentTime - element.currentTime / this.rate;
+          this.reschedule();
+        },
+        (err) => {
+          console.error("Couldn't play audio", err);
+          this.pause();
+        },
+      );
+      this.scheduleVoices();
+      this.emit();
+      return;
+    }
+
     const source = this.ctx.createBufferSource();
-    source.buffer = this.buffer;
+    source.buffer = this.audio.buffer;
     source.connect(this.audioGain);
     source.onended = () => {
       // Only handle reaching the end, not stop() from pause/seek
@@ -119,8 +230,6 @@ export class Player {
     };
     source.start(0, from);
     this.source = source;
-    this.startedAt = this.ctx.currentTime - from;
-    this.playing = true;
     this.scheduleVoices();
     this.emit();
   }
@@ -134,6 +243,7 @@ export class Player {
     const source = this.source;
     this.source = null;
     source?.stop();
+    this.element?.pause();
     this.stopVoices();
     this.emit();
   }
@@ -191,8 +301,8 @@ export class Player {
       const osc = this.voice(
         note.pitch,
         note.velocity,
-        this.startedAt + start,
-        this.startedAt + end,
+        this.toContextTime(start),
+        this.toContextTime(end),
       );
       this.voices.push(osc);
     }
@@ -208,7 +318,7 @@ export class Player {
         const downbeat =
           ((beat % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar ===
           0;
-        this.voices.push(this.click(this.startedAt + time, downbeat));
+        this.voices.push(this.click(this.toContextTime(time), downbeat));
       }
     }
   }
@@ -242,6 +352,7 @@ export class Player {
 
   dispose() {
     this.pause();
+    this.releaseElement();
     void this.ctx.close();
   }
 }
