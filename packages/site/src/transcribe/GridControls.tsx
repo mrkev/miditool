@@ -68,11 +68,12 @@ function NumberField({
 export function GridControls({
   grid,
   onChange,
-  currentTime,
+  cursor,
 }: {
   grid: Grid;
   onChange: (grid: Grid) => void;
-  currentTime: number;
+  /** Playback position, or the cursor when stopped */
+  cursor: number;
 }) {
   const tapsRef = useRef<number[]>([]);
   const update = (fields: Partial<Grid>) =>
@@ -170,9 +171,9 @@ export function GridControls({
             />
             <Button
               variant="outline"
-              onClick={() => update({ offset: currentTime })}
+              onClick={() => update({ offset: cursor })}
             >
-              Use playhead
+              Use cursor
             </Button>
           </div>
 

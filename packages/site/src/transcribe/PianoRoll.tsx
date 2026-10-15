@@ -36,7 +36,8 @@ export interface HoverInfo {
 }
 
 type Drag =
-  | { type: "seek" }
+  /** Dragging along the ruler */
+  | { type: "cursor" }
   | {
       type: "move";
       id: number;
@@ -74,6 +75,9 @@ export interface PianoRollProps {
   /** Pixels per semitone */
   semitoneHeight: number;
   grid: Grid;
+  /** Seconds where playback starts */
+  cursor: number;
+  onCursorChange: (cursor: number) => void;
   onHover: (info: HoverInfo | null) => void;
   /** Detected notes shown as ghosts until accepted */
   suggestions: Omit<Note, "id">[];
@@ -154,6 +158,7 @@ export function PianoRoll(props: PianoRollProps) {
       duration,
       grid,
       suggestions,
+      cursor,
     } = propsRef.current;
     const dpr = window.devicePixelRatio || 1;
     const ctx = canvas.getContext("2d")!;
@@ -365,9 +370,23 @@ export function PianoRoll(props: PianoRollProps) {
       }
     }
 
-    // Playhead
+    // Cursor: where playback starts. A line with a marker on the ruler
+    const cx = Math.round(timeToX(cursor));
+    if (cx >= KEYS_WIDTH && cx <= width) {
+      ctx.fillStyle = "rgba(250, 204, 21, 0.75)";
+      ctx.fillRect(cx, RULER_HEIGHT, 1, areaHeight);
+      ctx.fillStyle = "#facc15";
+      ctx.beginPath();
+      ctx.moveTo(cx - 5, RULER_HEIGHT - 9);
+      ctx.lineTo(cx + 5, RULER_HEIGHT - 9);
+      ctx.lineTo(cx, RULER_HEIGHT - 1);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Playhead, while playing
     const px = timeToX(player.currentTime);
-    if (px >= KEYS_WIDTH && px <= width) {
+    if (player.playing && px >= KEYS_WIDTH && px <= width) {
       ctx.fillStyle = "#f43f5e";
       ctx.fillRect(Math.round(px), 0, 1.5, height);
     }
@@ -508,6 +527,17 @@ export function PianoRoll(props: PianoRollProps) {
     return null;
   };
 
+  /**
+   * Moves the cursor (snapped to the grid). While playing, playback jumps
+   * there too.
+   */
+  const placeCursor = (time: number, e: React.PointerEvent) => {
+    const { player, onCursorChange, duration } = propsRef.current;
+    const cursor = Math.max(0, Math.min(duration, snap(time, e)));
+    onCursorChange(cursor);
+    if (player.playing) player.seek(cursor);
+  };
+
   /** Snaps to the grid, unless Shift is held */
   const snap = (time: number, e: React.PointerEvent) =>
     e.shiftKey ? time : snapTime(propsRef.current.grid, time);
@@ -526,7 +556,7 @@ export function PianoRoll(props: PianoRollProps) {
   const updateNote = (id: number, update: (note: Note) => Note) => {
     const { setNotes, checkpoint } = propsRef.current;
     const drag = dragRef.current;
-    if (drag && drag.type !== "seek" && !drag.checkpointed) {
+    if (drag && drag.type !== "cursor" && !drag.checkpointed) {
       checkpoint();
       drag.checkpointed = true;
     }
@@ -551,8 +581,8 @@ export function PianoRoll(props: PianoRollProps) {
 
     if (y < RULER_HEIGHT) {
       if (x >= KEYS_WIDTH) {
-        player.seek(time);
-        dragRef.current = { type: "seek" };
+        placeCursor(time, e);
+        dragRef.current = { type: "cursor" };
         e.currentTarget.setPointerCapture(e.pointerId);
       }
       return;
@@ -662,8 +692,8 @@ export function PianoRoll(props: PianoRollProps) {
       return;
     }
 
-    if (drag.type === "seek") {
-      player.seek(Math.max(0, Math.min(duration, time)));
+    if (drag.type === "cursor") {
+      placeCursor(Math.max(0, Math.min(duration, time)), e);
     } else if (drag.type === "move") {
       canvas.style.cursor = "grabbing";
       const pitch = yToPitch(y);

@@ -1,9 +1,9 @@
 import {
   DownloadIcon,
   FileAudioIcon,
-  PauseIcon,
   PlayIcon,
   Redo2Icon,
+  SquareIcon,
   Trash2Icon,
   Undo2Icon,
   UploadIcon,
@@ -129,6 +129,12 @@ export function TranscribeTool() {
     canRedo,
   } = useNoteHistory();
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  /** Where playback starts, in seconds */
+  const [cursor, setCursor] = useState(0);
+  const cursorRef = useRef(cursor);
+  useLayoutEffect(() => {
+    cursorRef.current = cursor;
+  });
   const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
   const editingVelocityRef = useRef(false);
   // For keyboard shortcuts, which run outside React's event system
@@ -261,8 +267,16 @@ export function TranscribeTool() {
       const mod = e.metaKey || e.ctrlKey;
       const selectedId = selectedIdRef.current;
       if (e.key === " ") {
+        // Like Ableton: Space plays from the cursor, Shift+Space resumes
+        // from where playback stopped
         e.preventDefault();
-        player.toggle();
+        if (player.playing) player.pause();
+        else if (e.shiftKey) player.play();
+        else player.playFrom(cursorRef.current);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        setCursor(0);
+        if (player.playing) player.seek(0);
       } else if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -352,6 +366,7 @@ export function TranscribeTool() {
     setError(null);
     setSpectrogram(null);
     setSuggesting(false);
+    setCursor(0);
     setSelectedId(null);
     setProgress(0);
 
@@ -544,13 +559,15 @@ export function TranscribeTool() {
             <div className="flex items-center gap-2">
               <Button
                 size="icon"
-                aria-label={playing ? "Pause" : "Play"}
-                onClick={() => player.toggle()}
+                aria-label={playing ? "Stop" : "Play from cursor"}
+                onClick={() =>
+                  playing ? player.pause() : player.playFrom(cursor)
+                }
               >
-                {playing ? <PauseIcon /> : <PlayIcon />}
+                {playing ? <SquareIcon /> : <PlayIcon />}
               </Button>
               <span className="text-sm tabular-nums">
-                {formatTime(currentTime)}
+                {formatTime(playing ? currentTime : cursor)}
                 <span className="text-muted-foreground">
                   {" "}
                   / {formatTime(duration)}
@@ -563,7 +580,7 @@ export function TranscribeTool() {
             <GridControls
               grid={grid}
               onChange={setGrid}
-              currentTime={currentTime}
+              cursor={playing ? currentTime : cursor}
             />
             <SuggestControls
               active={suggesting}
@@ -678,6 +695,8 @@ export function TranscribeTool() {
               onZoom={setZoom}
               semitoneHeight={SEMITONE_HEIGHT}
               grid={grid}
+              cursor={cursor}
+              onCursorChange={setCursor}
               onHover={setHover}
               suggestions={suggestions}
               onAcceptSuggestion={acceptSuggestion}
@@ -698,7 +717,8 @@ export function TranscribeTool() {
             </span>
             <span>
               Drag to draw · drag a note to move, its edge to resize · ↑↓
-              transpose · Alt+↑↓ velocity · Alt-click to delete · Space to play
+              transpose · Alt+↑↓ velocity · Alt-click to delete · click the
+              ruler to set the cursor · Space plays from it, Shift+Space resumes
               · ⌘/Ctrl+scroll to zoom
             </span>
           </div>

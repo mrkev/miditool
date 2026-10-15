@@ -115,12 +115,11 @@ export class Player {
     this.emit();
   }
 
-  toggle() {
-    if (this.playing) {
-      this.pause();
-    } else {
-      this.play();
-    }
+  /** Starts playing from `time`, whether or not already playing */
+  playFrom(time: number) {
+    this.pause();
+    this.position = Math.max(0, Math.min(time, this.duration));
+    this.play();
   }
 
   seek(time: number) {
