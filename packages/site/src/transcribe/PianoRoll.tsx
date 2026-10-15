@@ -8,6 +8,7 @@ import {
 import {
   beatDuration,
   beatToTime,
+  divisionBeats,
   snapStep,
   snapTime,
   timeToBeat,
@@ -223,8 +224,19 @@ export function PianoRoll(props: PianoRollProps) {
       Math.max(0, Math.ceil(Math.log2(32 / barPx))),
     );
     if (grid.enabled) {
-      const subdivisions = grid.snap > 0 ? grid.snap : 4;
-      const subPx = beatPx / subdivisions;
+      // Divisions (eg. 1/16 or 1/8 triplets), where they're not on a beat
+      const division = divisionBeats(grid);
+      if (division * beatPx >= 8) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+        const first = Math.floor(timeToBeat(grid, t0) / division);
+        const last = Math.ceil(timeToBeat(grid, t1) / division);
+        for (let k = first; k <= last; k++) {
+          const beat = k * division;
+          if (Math.abs(beat - Math.round(beat)) < 1e-6) continue;
+          const x = Math.round(timeToX(beatToTime(grid, beat)));
+          ctx.fillRect(x, RULER_HEIGHT, 1, areaHeight);
+        }
+      }
       const firstBeat = Math.floor(timeToBeat(grid, t0));
       const lastBeat = Math.ceil(timeToBeat(grid, t1));
       for (let beat = firstBeat; beat <= lastBeat; beat++) {
@@ -235,15 +247,6 @@ export function PianoRoll(props: PianoRollProps) {
             : "rgba(255, 255, 255, 0.12)";
           const x = Math.round(timeToX(beatToTime(grid, beat)));
           ctx.fillRect(x, RULER_HEIGHT, 1, areaHeight);
-        }
-        if (subPx >= 8) {
-          ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
-          for (let i = 1; i < subdivisions; i++) {
-            const x = Math.round(
-              timeToX(beatToTime(grid, beat + i / subdivisions)),
-            );
-            ctx.fillRect(x, RULER_HEIGHT, 1, areaHeight);
-          }
         }
       }
     } else {

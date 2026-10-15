@@ -1,6 +1,7 @@
-// Playback balance between the recording and the synth playing the notes
+// Playback balance between the recording, the synth playing the notes and
+// the metronome
 
-export type Channel = "audio" | "notes";
+export type Channel = "audio" | "notes" | "metronome";
 
 export interface Mix {
   /** Channels that are on */
@@ -11,7 +12,7 @@ export interface Mix {
 
 export const DEFAULT_MIX: Mix = {
   enabled: ["audio", "notes"],
-  levels: { audio: 1, notes: 0.7 },
+  levels: { audio: 1, notes: 0.7, metronome: 0.7 },
 };
 
 /** Squared, so the slider feels closer to linear in loudness */

@@ -1,5 +1,9 @@
+import { beatToTime, timeToBeat, type Grid } from "./grid";
 import { DEFAULT_VELOCITY, type Note } from "./notes";
 import { midiToFrequency } from "./spectrogram";
+
+/** Metronome click level at full volume */
+const METRONOME_GAIN = 0.5;
 
 /** Synth level at full volume, roughly matching typical recordings */
 const NOTES_GAIN = 0.3;
@@ -12,6 +16,9 @@ export class Player {
   readonly ctx = new AudioContext();
   private readonly audioGain = this.ctx.createGain();
   private readonly notesGain = this.ctx.createGain();
+  private readonly metronomeGain = this.ctx.createGain();
+  /** Tempo the metronome clicks to, or null for no metronome */
+  private metronome: Grid | null = null;
   private buffer: AudioBuffer | null = null;
   private source: AudioBufferSourceNode | null = null;
   private voices: OscillatorNode[] = [];
@@ -27,6 +34,8 @@ export class Player {
   constructor() {
     this.audioGain.connect(this.ctx.destination);
     this.notesGain.connect(this.ctx.destination);
+    this.metronomeGain.connect(this.ctx.destination);
+    this.metronomeGain.gain.value = 0;
     this.notesGain.gain.value = NOTES_GAIN;
   }
 
@@ -67,8 +76,22 @@ export class Player {
     this.notesGain.gain.value = volume * NOTES_GAIN;
   }
 
+  setMetronomeVolume(volume: number) {
+    this.metronomeGain.gain.value = volume * METRONOME_GAIN;
+  }
+
   setNotes(notes: Note[]) {
     this.notes = notes;
+    this.reschedule();
+  }
+
+  /** Clicks on every beat of `grid` while playing, or stops with null */
+  setMetronome(grid: Grid | null) {
+    this.metronome = grid;
+    this.reschedule();
+  }
+
+  private reschedule() {
     if (this.playing) {
       this.stopVoices();
       this.scheduleVoices();
@@ -173,6 +196,35 @@ export class Player {
       );
       this.voices.push(osc);
     }
+
+    // Metronome clicks, accenting the first beat of each bar
+    const grid = this.metronome;
+    if (grid != null) {
+      const first = Math.ceil(timeToBeat(grid, now));
+      const last = Math.floor(timeToBeat(grid, this.duration));
+      for (let beat = first; beat <= last; beat++) {
+        const time = beatToTime(grid, beat);
+        if (time < 0) continue;
+        const downbeat =
+          ((beat % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar ===
+          0;
+        this.voices.push(this.click(this.startedAt + time, downbeat));
+      }
+    }
+  }
+
+  private click(time: number, accent: boolean) {
+    const osc = this.ctx.createOscillator();
+    const env = this.ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = accent ? 1600 : 1000;
+    env.gain.setValueAtTime(0, time);
+    env.gain.linearRampToValueAtTime(accent ? 1 : 0.6, time + 0.001);
+    env.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+    osc.connect(env).connect(this.metronomeGain);
+    osc.start(time);
+    osc.stop(time + 0.06);
+    return osc;
   }
 
   private stopVoices() {

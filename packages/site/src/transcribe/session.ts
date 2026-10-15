@@ -1,4 +1,4 @@
-import { DEFAULT_GRID, type Grid } from "./grid";
+import { normalizeGrid, type Grid } from "./grid";
 import type { NoteInput } from "./notes";
 
 // Autosaved transcription for each audio file, in localStorage
@@ -22,7 +22,7 @@ export function loadSession(key: string): Session | null {
     const parsed = JSON.parse(raw) as Partial<Session>;
     return {
       notes: Array.isArray(parsed.notes) ? parsed.notes : [],
-      grid: { ...DEFAULT_GRID, ...parsed.grid },
+      grid: normalizeGrid(parsed.grid),
     };
   } catch {
     return null;

@@ -2,6 +2,7 @@ import {
   DownloadIcon,
   FileAudioIcon,
   PlayIcon,
+  MetronomeIcon,
   Redo2Icon,
   SquareIcon,
   Trash2Icon,
@@ -19,6 +20,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { analyze, toMono } from "./analyze";
 import { renderSpectrogram } from "./colormap";
@@ -233,11 +235,19 @@ export function TranscribeTool() {
 
   useEffect(() => () => player?.dispose(), [player]);
   useEffect(() => player?.setNotes(notes), [player, notes]);
+  useEffect(
+    () =>
+      player?.setMetronome(
+        grid.enabled && mix.enabled.includes("metronome") ? grid : null,
+      ),
+    [player, grid, mix.enabled],
+  );
   useEffect(() => {
     const gain = (channel: Channel) =>
       mix.enabled.includes(channel) ? levelToGain(mix.levels[channel]) : 0;
     player?.setAudioVolume(gain("audio"));
     player?.setNotesVolume(gain("notes"));
+    player?.setMetronomeVolume(gain("metronome"));
     saveMix(mix);
   }, [player, mix]);
 
@@ -566,6 +576,28 @@ export function TranscribeTool() {
               >
                 {playing ? <SquareIcon /> : <PlayIcon />}
               </Button>
+              <Toggle
+                variant="outline"
+                aria-label="Metronome"
+                title={
+                  grid.enabled
+                    ? "Metronome"
+                    : "Metronome: set a tempo in Grid first"
+                }
+                disabled={!grid.enabled}
+                className="data-pressed:bg-primary data-pressed:text-primary-foreground data-pressed:hover:bg-primary/85 data-pressed:hover:text-primary-foreground"
+                pressed={grid.enabled && mix.enabled.includes("metronome")}
+                onPressedChange={(on) =>
+                  setMix({
+                    ...mix,
+                    enabled: on
+                      ? [...mix.enabled, "metronome"]
+                      : mix.enabled.filter((c) => c !== "metronome"),
+                  })
+                }
+              >
+                <MetronomeIcon />
+              </Toggle>
               <span className="text-sm tabular-nums">
                 {formatTime(playing ? currentTime : cursor)}
                 <span className="text-muted-foreground">

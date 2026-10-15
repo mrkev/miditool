@@ -1,4 +1,4 @@
-import { MetronomeIcon } from "lucide-react";
+import { Grid3x3Icon } from "lucide-react";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Toggle } from "@/components/ui/toggle";
 import { SNAP_OPTIONS, tapTempo, type Grid } from "./grid";
+
+/** Short label for the snap setting, eg. "1/16" or "1/8T" */
+function snapLabel(grid: Grid) {
+  if (grid.snap === "off") return "no snap";
+  const label = SNAP_OPTIONS.find((o) => o.value === grid.snap)?.label;
+  return `${label}${grid.triplet ? "T" : ""}`;
+}
 
 /** Taps further apart than this start a new tempo */
 const TAP_RESET_MS = 2000;
@@ -93,8 +101,8 @@ export function GridControls({
   return (
     <Popover>
       <PopoverTrigger render={<Button variant="outline" />}>
-        <MetronomeIcon data-icon="inline-start" />
-        {grid.enabled ? `${grid.bpm} BPM` : "Grid"}
+        <Grid3x3Icon data-icon="inline-start" />
+        {grid.enabled ? `${grid.bpm} BPM · ${snapLabel(grid)}` : "Grid"}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 gap-4 p-4">
         <PopoverHeader>
@@ -181,11 +189,21 @@ export function GridControls({
           <Select
             items={SNAP_OPTIONS}
             value={grid.snap}
-            onValueChange={(snap) => update({ snap: snap ?? 0 })}
+            onValueChange={(snap) => update({ snap: snap ?? "off" })}
           >
-            <SelectTrigger id="grid-snap" className="w-32">
-              <SelectValue />
-            </SelectTrigger>
+            <div className="flex gap-1">
+              <SelectTrigger id="grid-snap" className="w-24">
+                <SelectValue />
+              </SelectTrigger>
+              <Toggle
+                variant="outline"
+                className="data-pressed:bg-primary data-pressed:text-primary-foreground data-pressed:hover:bg-primary/85 data-pressed:hover:text-primary-foreground"
+                pressed={grid.triplet}
+                onPressedChange={(triplet) => update({ triplet })}
+              >
+                Triplet
+              </Toggle>
+            </div>
             <SelectContent>
               {SNAP_OPTIONS.map((option) => (
                 <SelectItem key={option.value} value={option.value}>

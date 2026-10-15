@@ -15,7 +15,22 @@ import type { Channel, Mix } from "./mix";
 const CHANNELS: { channel: Channel; label: string }[] = [
   { channel: "audio", label: "Audio" },
   { channel: "notes", label: "Notes" },
+  { channel: "metronome", label: "Metronome" },
 ];
+/** Channels with an on/off toggle here; the metronome's is in the transport */
+const TOGGLED = CHANNELS.slice(0, 2);
+
+/** Turns audio and notes on at the given levels, leaving the metronome */
+function favor(mix: Mix, levels: { audio: number; notes: number }): Mix {
+  return {
+    enabled: [
+      "audio",
+      "notes",
+      ...mix.enabled.filter((c) => c === "metronome"),
+    ],
+    levels: { ...mix.levels, ...levels },
+  };
+}
 
 export function MixControls({
   mix,
@@ -41,13 +56,19 @@ export function MixControls({
         variant="outline"
         size="sm"
         spacing={0}
-        value={mix.enabled}
+        value={mix.enabled.filter((c) => c !== "metronome")}
         onValueChange={(enabled) =>
-          onChange({ ...mix, enabled: enabled as Channel[] })
+          onChange({
+            ...mix,
+            enabled: [
+              ...(enabled as Channel[]),
+              ...mix.enabled.filter((c) => c === "metronome"),
+            ],
+          })
         }
         aria-label="Playback"
       >
-        {CHANNELS.map(({ channel, label }) => (
+        {TOGGLED.map(({ channel, label }) => (
           <ToggleGroupItem key={channel} value={channel}>
             {label}
           </ToggleGroupItem>
@@ -94,12 +115,7 @@ export function MixControls({
               variant="outline"
               size="sm"
               className="flex-1"
-              onClick={() =>
-                onChange({
-                  enabled: ["audio", "notes"],
-                  levels: { audio: 1, notes: 0.35 },
-                })
-              }
+              onClick={() => onChange(favor(mix, { audio: 1, notes: 0.35 }))}
             >
               Favor audio
             </Button>
@@ -107,12 +123,7 @@ export function MixControls({
               variant="outline"
               size="sm"
               className="flex-1"
-              onClick={() =>
-                onChange({
-                  enabled: ["audio", "notes"],
-                  levels: { audio: 0.45, notes: 1 },
-                })
-              }
+              onClick={() => onChange(favor(mix, { audio: 0.45, notes: 1 }))}
             >
               Favor notes
             </Button>
