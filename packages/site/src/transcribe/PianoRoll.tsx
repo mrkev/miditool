@@ -37,25 +37,40 @@ export interface HoverInfo {
 }
 
 type Drag =
-  /** Dragging along the ruler */
+  /** Dragging the cursor, on the ruler or with ⌘/Ctrl */
   | { type: "cursor" }
   | {
       type: "move";
-      id: number;
+      /** The note grabbed; the rest of the selection follows it */
+      anchor: Note;
+      /** Selected notes as they were when the drag started */
+      originals: Map<number, Note>;
       grabOffset: number;
+      /** Last pitch previewed */
       pitch: number;
+      startX: number;
+      startY: number;
       checkpointed: boolean;
     }
   | {
       type: "resize";
-      id: number;
-      /** Note start, in seconds */
-      start: number;
-      /** Latest duration set by this drag */
+      anchor: Note;
+      originals: Map<number, Note>;
+      /** Latest duration of the anchor set by this drag */
       duration: number | null;
       created: boolean;
       startX: number;
       checkpointed: boolean;
+    }
+  /** Selection box, in time and pitch so it survives scrolling */
+  | {
+      type: "box";
+      fromTime: number;
+      fromPitch: number;
+      toTime: number;
+      toPitch: number;
+      /** Selection before the box, which it adds to */
+      base: ReadonlySet<number>;
     };
 
 export interface PianoRollProps {
@@ -68,8 +83,8 @@ export interface PianoRollProps {
   setNotes: (update: (notes: Note[]) => Note[]) => void;
   /** Save the current notes to the undo history */
   checkpoint: () => void;
-  selectedId: number | null;
-  onSelect: (id: number | null) => void;
+  selectedIds: ReadonlySet<number>;
+  onSelectionChange: (ids: ReadonlySet<number>) => void;
   /** Pixels per second */
   zoom: number;
   onZoom: (zoom: number) => void;
@@ -152,7 +167,7 @@ export function PianoRoll(props: PianoRollProps) {
       image,
       spectrogram,
       notes,
-      selectedId,
+      selectedIds,
       zoom,
       semitoneHeight,
       player,
@@ -311,7 +326,7 @@ export function PianoRoll(props: PianoRollProps) {
       const x = timeToX(note.start);
       const y = pitchToY(note.pitch);
       const w = Math.max(2, note.duration * zoom);
-      const selected = note.id === selectedId;
+      const selected = selectedIds.has(note.id);
       ctx.beginPath();
       ctx.roundRect(x + 0.5, y + 0.5, w - 1, semitoneHeight - 1, 3);
       // Louder notes are more opaque; muted ones are grey
@@ -377,6 +392,21 @@ export function PianoRoll(props: PianoRollProps) {
         ctx.fillRect(x, RULER_HEIGHT - 6, 1, 5);
         ctx.fillText(formatRulerTime(t, step), x + 3, RULER_HEIGHT / 2 - 1);
       }
+    }
+
+    // Selection box
+    const drag = dragRef.current;
+    if (drag?.type === "box") {
+      const x0 = timeToX(Math.min(drag.fromTime, drag.toTime));
+      const x1 = timeToX(Math.max(drag.fromTime, drag.toTime));
+      const y0 = pitchToY(Math.max(drag.fromPitch, drag.toPitch));
+      const y1 =
+        pitchToY(Math.min(drag.fromPitch, drag.toPitch)) + semitoneHeight;
+      ctx.fillStyle = "rgba(125, 211, 252, 0.12)";
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.strokeStyle = "rgba(125, 211, 252, 0.8)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0, y1 - y0);
     }
 
     // Cursor: where playback starts. A line with a marker on the ruler
@@ -540,16 +570,39 @@ export function PianoRoll(props: PianoRollProps) {
    * Moves the cursor (snapped to the grid). While playing, playback jumps
    * there too.
    */
-  const placeCursor = (time: number, e: React.PointerEvent) => {
-    const { player, onCursorChange, duration } = propsRef.current;
-    const cursor = Math.max(0, Math.min(duration, snap(time, e)));
+  const placeCursor = (time: number, snapped: boolean) => {
+    const { player, onCursorChange, duration, grid } = propsRef.current;
+    const cursor = Math.max(
+      0,
+      Math.min(duration, snapped ? snapTime(grid, time) : time),
+    );
     onCursorChange(cursor);
     if (player.playing) player.seek(cursor);
   };
 
-  /** Snaps to the grid, unless Shift is held */
+  /** Holding ⌘/Ctrl while dragging places things off the grid, like Ableton */
+  const isFree = (e: React.PointerEvent) => e.metaKey || e.ctrlKey;
+
+  /** Snaps to the grid, unless ⌘/Ctrl is held */
   const snap = (time: number, e: React.PointerEvent) =>
-    e.shiftKey ? time : snapTime(propsRef.current.grid, time);
+    isFree(e) ? time : snapTime(propsRef.current.grid, time);
+
+  /** Ids of notes overlapping a time and pitch range */
+  const notesInBox = (drag: Extract<Drag, { type: "box" }>) => {
+    const t0 = Math.min(drag.fromTime, drag.toTime);
+    const t1 = Math.max(drag.fromTime, drag.toTime);
+    const p0 = Math.min(drag.fromPitch, drag.toPitch);
+    const p1 = Math.max(drag.fromPitch, drag.toPitch);
+    return propsRef.current.notes
+      .filter(
+        (note) =>
+          note.pitch >= p0 &&
+          note.pitch <= p1 &&
+          note.start < t1 &&
+          note.start + note.duration > t0,
+      )
+      .map((note) => note.id);
+  };
 
   const hitSuggestion = (x: number, y: number) => {
     const { timeToX, pitchToY } = geometry();
@@ -562,15 +615,21 @@ export function PianoRoll(props: PianoRollProps) {
     });
   };
 
-  const updateNote = (id: number, update: (note: Note) => Note) => {
+  /** Applies `update` to the notes a move or resize drag started with */
+  const updateDragged = (
+    drag: Extract<Drag, { type: "move" | "resize" }>,
+    update: (original: Note, note: Note) => Note,
+  ) => {
     const { setNotes, checkpoint } = propsRef.current;
-    const drag = dragRef.current;
-    if (drag && drag.type !== "cursor" && !drag.checkpointed) {
+    if (!drag.checkpointed) {
       checkpoint();
       drag.checkpointed = true;
     }
     setNotes((notes) =>
-      notes.map((note) => (note.id === id ? update(note) : note)),
+      notes.map((note) => {
+        const original = drag.originals.get(note.id);
+        return original ? update(original, note) : note;
+      }),
     );
   };
 
@@ -579,7 +638,9 @@ export function PianoRoll(props: PianoRollProps) {
     const { xToTime, yToPitch } = geometry();
     const {
       player,
-      onSelect,
+      notes,
+      selectedIds,
+      onSelectionChange,
       setNotes,
       checkpoint,
       duration,
@@ -590,7 +651,7 @@ export function PianoRoll(props: PianoRollProps) {
 
     if (y < RULER_HEIGHT) {
       if (x >= KEYS_WIDTH) {
-        placeCursor(time, e);
+        placeCursor(time, !isFree(e));
         dragRef.current = { type: "cursor" };
         e.currentTarget.setPointerCapture(e.pointerId);
       }
@@ -609,23 +670,49 @@ export function PianoRoll(props: PianoRollProps) {
       if (hit) {
         checkpoint();
         setNotes((notes) => notes.filter((note) => note.id !== hit.note.id));
-        onSelect(null);
+        onSelectionChange(
+          new Set([...selectedIds].filter((id) => id !== hit.note.id)),
+        );
       }
       return;
     }
     if (e.button !== 0) {
       return;
     }
-
     e.currentTarget.setPointerCapture(e.pointerId);
+
+    // ⌘/Ctrl-click places the cursor, like Ableton
+    if (e.metaKey || e.ctrlKey) {
+      placeCursor(time, true);
+      dragRef.current = { type: "cursor" };
+      return;
+    }
+
     if (hit) {
-      onSelect(hit.note.id);
+      // Shift-click adds a note to the selection or takes it out
+      if (e.shiftKey) {
+        const next = new Set(selectedIds);
+        if (next.has(hit.note.id)) next.delete(hit.note.id);
+        else next.add(hit.note.id);
+        onSelectionChange(next);
+        return;
+      }
+      // Grabbing a selected note drags the whole selection
+      const selection = selectedIds.has(hit.note.id)
+        ? selectedIds
+        : new Set([hit.note.id]);
+      onSelectionChange(selection);
+      const originals = new Map(
+        notes
+          .filter((note) => selection.has(note.id))
+          .map((note) => [note.id, note]),
+      );
       player.preview(hit.note.pitch, 0.3, hit.note.velocity);
       dragRef.current = hit.edge
         ? {
             type: "resize",
-            id: hit.note.id,
-            start: hit.note.start,
+            anchor: hit.note,
+            originals,
             duration: null,
             created: false,
             startX: x,
@@ -633,11 +720,27 @@ export function PianoRoll(props: PianoRollProps) {
           }
         : {
             type: "move",
-            id: hit.note.id,
+            anchor: hit.note,
+            originals,
             grabOffset: time - hit.note.start,
             pitch: hit.note.pitch,
+            startX: x,
+            startY: y,
             checkpointed: false,
           };
+      return;
+    }
+
+    // Shift-drag on empty space selects with a box
+    if (e.shiftKey) {
+      dragRef.current = {
+        type: "box",
+        fromTime: time,
+        fromPitch: pitch,
+        toTime: time,
+        toPitch: pitch,
+        base: selectedIds,
+      };
       return;
     }
 
@@ -645,7 +748,7 @@ export function PianoRoll(props: PianoRollProps) {
     const suggestion = hitSuggestion(x, y);
     if (suggestion >= 0) {
       const id = onAcceptSuggestion(suggestion);
-      onSelect(id);
+      onSelectionChange(new Set(id == null ? [] : [id]));
       player.preview(suggestions[suggestion].pitch);
       return;
     }
@@ -653,16 +756,16 @@ export function PianoRoll(props: PianoRollProps) {
     checkpoint();
     const note = createNote({
       pitch,
-      start: Math.max(0, snap(time, e)),
+      start: Math.max(0, snapTime(propsRef.current.grid, time)),
       duration: MIN_DURATION,
     });
     setNotes((notes) => [...notes, note]);
-    onSelect(note.id);
+    onSelectionChange(new Set([note.id]));
     player.preview(pitch);
     dragRef.current = {
       type: "resize",
-      id: note.id,
-      start: note.start,
+      anchor: note,
+      originals: new Map([[note.id, note]]),
       duration: null,
       created: true,
       startX: x,
@@ -702,47 +805,82 @@ export function PianoRoll(props: PianoRollProps) {
     }
 
     if (drag.type === "cursor") {
-      placeCursor(Math.max(0, Math.min(duration, time)), e);
+      placeCursor(Math.max(0, Math.min(duration, time)), !isFree(e));
+    } else if (drag.type === "box") {
+      drag.toTime = time;
+      drag.toPitch = yToPitch(y);
+      propsRef.current.onSelectionChange(
+        new Set([...drag.base, ...notesInBox(drag)]),
+      );
+      requestDraw();
     } else if (drag.type === "move") {
       canvas.style.cursor = "grabbing";
-      const pitch = yToPitch(y);
-      if (pitch !== drag.pitch) {
-        drag.pitch = pitch;
-        player.preview(pitch, 0.15);
+      const { anchor, originals } = drag;
+      // Keep the whole selection in range
+      const notes = [...originals.values()];
+      const lowest = Math.min(...notes.map((n) => n.pitch));
+      const highest = Math.max(...notes.map((n) => n.pitch));
+      const earliest = Math.min(...notes.map((n) => n.start));
+      const dp = Math.min(
+        MAX_NOTE - highest,
+        Math.max(MIN_NOTE - lowest, yToPitch(y) - anchor.pitch),
+      );
+      const dt = Math.max(
+        -earliest,
+        snap(time - drag.grabOffset, e) - anchor.start,
+      );
+      if (anchor.pitch + dp !== drag.pitch) {
+        drag.pitch = anchor.pitch + dp;
+        player.preview(drag.pitch, 0.15);
       }
-      const start = Math.max(0, snap(time - drag.grabOffset, e));
-      updateNote(drag.id, (note) => ({ ...note, pitch, start }));
+      updateDragged(drag, (original, note) => ({
+        ...note,
+        pitch: original.pitch + dp,
+        start: original.start + dt,
+      }));
     } else {
       canvas.style.cursor = "ew-resize";
-      const step = e.shiftKey ? null : snapStep(propsRef.current.grid);
-      const duration = Math.max(
-        step ?? MIN_DURATION,
-        snap(time, e) - drag.start,
-      );
+      const step = isFree(e) ? null : snapStep(propsRef.current.grid);
+      const minDuration = step ?? MIN_DURATION;
+      const { anchor } = drag;
+      const duration = Math.max(minDuration, snap(time, e) - anchor.start);
       drag.duration = duration;
-      updateNote(drag.id, (note) => ({ ...note, duration }));
+      // Others in the selection change length by the same amount
+      const change = duration - anchor.duration;
+      updateDragged(drag, (original, note) => ({
+        ...note,
+        duration: Math.max(minDuration, original.duration + change),
+      }));
     }
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const drag = dragRef.current;
     dragRef.current = null;
-    if (drag?.type !== "resize") {
-      return;
-    }
     // Read from the drag rather than props, which may lag behind pointermove
-    const { x } = pointerPosition(e);
-    const { setNotes } = propsRef.current;
-    if (drag.created && Math.abs(x - drag.startX) < 3) {
-      // Plain click: add a note with the last drawn length
-      const duration = lastDurationRef.current;
-      setNotes((notes) =>
-        notes.map((note) =>
-          note.id === drag.id ? { ...note, duration } : note,
-        ),
-      );
-    } else if (drag.duration != null) {
-      lastDurationRef.current = drag.duration;
+    const { x, y } = pointerPosition(e);
+    const { setNotes, onSelectionChange } = propsRef.current;
+    if (drag?.type === "box") {
+      requestDraw();
+    } else if (drag?.type === "move") {
+      // A click on a note in a selection, without dragging, selects just it
+      const clicked =
+        Math.abs(x - drag.startX) < 3 && Math.abs(y - drag.startY) < 3;
+      if (clicked && drag.originals.size > 1) {
+        onSelectionChange(new Set([drag.anchor.id]));
+      }
+    } else if (drag?.type === "resize") {
+      if (drag.created && Math.abs(x - drag.startX) < 3) {
+        // Plain click: add a note with the last drawn length
+        const duration = lastDurationRef.current;
+        setNotes((notes) =>
+          notes.map((note) =>
+            note.id === drag.anchor.id ? { ...note, duration } : note,
+          ),
+        );
+      } else if (drag.duration != null) {
+        lastDurationRef.current = drag.duration;
+      }
     }
   };
 

@@ -166,20 +166,23 @@ export function TranscribeTool({
     canUndo,
     canRedo,
   } = useNoteHistory();
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
+  const clearSelection = () => setSelectedIds(new Set());
   /** Where playback starts, in seconds */
   const [cursor, setCursor] = useState(0);
   const cursorRef = useRef(cursor);
   useLayoutEffect(() => {
     cursorRef.current = cursor;
   });
-  const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
+  const selectedNotes = notes.filter((note) => selectedIds.has(note.id));
   const editingVelocityRef = useRef(false);
   // For keyboard shortcuts, which run outside React's event system
-  const selectedIdRef = useRef(selectedId);
+  const selectedIdsRef = useRef(selectedIds);
   const notesRef = useRef(notes);
   useLayoutEffect(() => {
-    selectedIdRef.current = selectedId;
+    selectedIdsRef.current = selectedIds;
     notesRef.current = notes;
   });
   const [hover, setHover] = useState<HoverInfo | null>(null);
@@ -346,7 +349,12 @@ export function TranscribeTool({
       // Arrow keys belong to focused controls like sliders
       const onControl = isControl(e.target);
       const mod = e.metaKey || e.ctrlKey;
-      const selectedId = selectedIdRef.current;
+      const selected = selectedIdsRef.current;
+      /** Applies `update` to the selected notes as one undo step */
+      const updateSelected = (update: (note: Note) => Note) =>
+        commit((notes) =>
+          notes.map((note) => (selected.has(note.id) ? update(note) : note)),
+        );
       if (e.key === "Home") {
         e.preventDefault();
         setCursor(0);
@@ -355,48 +363,47 @@ export function TranscribeTool({
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
+      } else if (mod && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        setSelectedIds(new Set(notesRef.current.map((note) => note.id)));
       } else if (e.key === "Escape") {
-        setSelectedId(null);
-      } else if (selectedId == null) {
+        setSelectedIds(new Set());
+      } else if (selected.size === 0) {
         return;
       } else if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
-        commit((notes) => notes.filter((note) => note.id !== selectedId));
-        setSelectedId(null);
+        commit((notes) => notes.filter((note) => !selected.has(note.id)));
+        setSelectedIds(new Set());
       } else if (e.key === "0" && !mod && !e.altKey) {
-        // Like Ableton: 0 mutes and unmutes the selected note
+        // Like Ableton: 0 mutes the selection, or unmutes it if all muted
         e.preventDefault();
-        commit((notes) =>
-          notes.map((note) =>
-            note.id === selectedId ? { ...note, muted: !note.muted } : note,
-          ),
-        );
+        const allMuted = notesRef.current
+          .filter((note) => selected.has(note.id))
+          .every((note) => note.muted);
+        updateSelected((note) => ({ ...note, muted: !allMuted }));
       } else if (onControl) {
         return;
       } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         e.preventDefault();
         const step = e.key === "ArrowUp" ? VELOCITY_STEP : -VELOCITY_STEP;
-        commit((notes) =>
-          notes.map((note) =>
-            note.id === selectedId
-              ? { ...note, velocity: clampVelocity(note.velocity + step) }
-              : note,
-          ),
-        );
+        updateSelected((note) => ({
+          ...note,
+          velocity: clampVelocity(note.velocity + step),
+        }));
       } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
         e.preventDefault();
-        const step = (e.shiftKey ? 12 : 1) * (e.key === "ArrowUp" ? 1 : -1);
-        const transpose = (pitch: number) =>
-          Math.min(MAX_NOTE, Math.max(MIN_NOTE, pitch + step));
-        commit((notes) =>
-          notes.map((note) =>
-            note.id === selectedId
-              ? { ...note, pitch: transpose(note.pitch) }
-              : note,
-          ),
+        const pitches = notesRef.current
+          .filter((note) => selected.has(note.id))
+          .map((note) => note.pitch);
+        const wanted = (e.shiftKey ? 12 : 1) * (e.key === "ArrowUp" ? 1 : -1);
+        // Move the selection together, as far as the range allows
+        const step = Math.min(
+          MAX_NOTE - Math.max(...pitches),
+          Math.max(MIN_NOTE - Math.min(...pitches), wanted),
         );
-        const note = notesRef.current.find((note) => note.id === selectedId);
-        if (note) player.preview(transpose(note.pitch));
+        if (step === 0) return;
+        updateSelected((note) => ({ ...note, pitch: note.pitch + step }));
+        player.preview(pitches[0] + step);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -451,7 +458,7 @@ export function TranscribeTool({
     setSpectrogram(null);
     setSuggesting(false);
     setCursor(0);
-    setSelectedId(null);
+    clearSelection();
     setProgress(0);
 
     // Restore the last transcription of this file
@@ -514,7 +521,7 @@ export function TranscribeTool({
           createNote({ ...note, start: note.start + offset }),
         ),
       );
-      setSelectedId(null);
+      clearSelection();
       if (!grid.enabled && imported.bpm != null) {
         setGrid({
           ...grid,
@@ -712,15 +719,16 @@ export function TranscribeTool({
               onAcceptAll={acceptAllSuggestions}
             />
 
-            {selectedNote && (
+            {selectedNotes.length > 0 && (
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
                 Velocity
+                {selectedNotes.length > 1 && ` (${selectedNotes.length})`}
                 <Slider
                   className="data-horizontal:w-24"
                   min={1}
                   max={127}
                   step={1}
-                  value={[selectedNote.velocity]}
+                  value={[selectedNotes[0].velocity]}
                   onValueChange={(value) => {
                     // One undo step per drag
                     if (!editingVelocityRef.current) {
@@ -730,9 +738,7 @@ export function TranscribeTool({
                     const velocity = sliderValue(value);
                     setNotes((notes) =>
                       notes.map((note) =>
-                        note.id === selectedNote.id
-                          ? { ...note, velocity }
-                          : note,
+                        selectedIds.has(note.id) ? { ...note, velocity } : note,
                       ),
                     );
                   }}
@@ -741,7 +747,7 @@ export function TranscribeTool({
                   }}
                 />
                 <span className="w-7 text-foreground tabular-nums">
-                  {selectedNote.velocity}
+                  {selectedNotes[0].velocity}
                 </span>
               </label>
             )}
@@ -782,7 +788,7 @@ export function TranscribeTool({
                 disabled={notes.length === 0}
                 onClick={() => {
                   commit(() => []);
-                  setSelectedId(null);
+                  clearSelection();
                 }}
               >
                 <Trash2Icon />
@@ -810,8 +816,8 @@ export function TranscribeTool({
               notes={notes}
               setNotes={setNotes}
               checkpoint={checkpoint}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
+              selectedIds={selectedIds}
+              onSelectionChange={setSelectedIds}
               zoom={zoom}
               onZoom={setZoom}
               semitoneHeight={SEMITONE_HEIGHT}
@@ -837,10 +843,11 @@ export function TranscribeTool({
                     `${notes.length} note${notes.length === 1 ? "" : "s"} · saved in this browser`)}
             </span>
             <span>
-              Drag to draw · drag a note to move, its edge to resize · ↑↓
-              transpose · Alt+↑↓ velocity · 0 mutes · Alt-click to delete ·
-              click the ruler to set the cursor · Space plays from it,
-              Shift+Space resumes · ⌘/Ctrl+scroll to zoom
+              Drag to draw · drag notes to move, edges to resize (⌘/Ctrl while
+              dragging ignores the grid) · Shift-click or Shift-drag to select
+              more · ↑↓ transpose · Alt+↑↓ velocity · 0 mutes · Alt-click
+              deletes · ⌘/Ctrl-click or the ruler sets the cursor · Space plays
+              from it, Shift+Space resumes · ⌘/Ctrl+scroll zooms
             </span>
           </div>
         </>

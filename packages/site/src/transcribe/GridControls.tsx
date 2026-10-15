@@ -115,8 +115,8 @@ export function GridControls({
             />
           </div>
           <PopoverDescription>
-            Shows bars and beats, snaps notes to them (hold Shift to place
-            freely) and sets the exported MIDI tempo.
+            Shows bars and beats, snaps notes to them (hold ⌘/Ctrl while
+            dragging to place freely) and sets the exported MIDI tempo.
           </PopoverDescription>
         </PopoverHeader>
 
