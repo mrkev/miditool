@@ -37,12 +37,15 @@ export function saveSession(key: string, session: Session) {
       localStorage.setItem(
         key,
         JSON.stringify({
-          notes: session.notes.map(({ pitch, start, duration, velocity }) => ({
-            pitch,
-            start,
-            duration,
-            velocity,
-          })),
+          notes: session.notes.map(
+            ({ pitch, start, duration, velocity, muted }) => ({
+              pitch,
+              start,
+              duration,
+              velocity,
+              muted,
+            }),
+          ),
           grid: session.grid,
         }),
       );

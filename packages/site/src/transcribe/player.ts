@@ -184,7 +184,7 @@ export class Player {
     const now = this.currentTime;
     for (const note of this.notes) {
       const end = note.start + note.duration;
-      if (end <= now) {
+      if (note.muted || end <= now) {
         continue;
       }
       const start = Math.max(note.start, now);

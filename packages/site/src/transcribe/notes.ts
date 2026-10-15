@@ -11,6 +11,8 @@ export interface Note {
   duration: number;
   /** MIDI velocity, 1 to 127 */
   velocity: number;
+  /** Muted notes stay in place but don't play or export */
+  muted?: boolean;
 }
 
 export const DEFAULT_VELOCITY = 100;
@@ -79,6 +81,7 @@ export function notesToMidi(notes: Note[], grid?: Grid): Uint8Array {
     );
 
   const events = notes
+    .filter((note) => !note.muted)
     .flatMap((note) => [
       { tick: toTick(note.start), on: true, note },
       { tick: toTick(note.start + note.duration), on: false, note },

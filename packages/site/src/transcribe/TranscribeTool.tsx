@@ -12,6 +12,7 @@ import {
 import {
   useDeferredValue,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -38,6 +39,7 @@ import {
 import { PianoRoll, type HoverInfo } from "./PianoRoll";
 import { levelToGain, loadMix, saveMix, type Channel, type Mix } from "./mix";
 import { MixControls } from "./MixControls";
+import { loadLastFile, saveLastFile } from "./lastFile";
 import { Player } from "./player";
 import { SuggestControls } from "./SuggestControls";
 import { ViewControls } from "./ViewControls";
@@ -68,11 +70,40 @@ function sliderValue(value: number | readonly number[]) {
   return Array.isArray(value) ? value[0] : (value as number);
 }
 
-function isInteractive(target: EventTarget | null) {
+/** Input types that don't take typed text */
+const NON_TEXT_INPUTS = new Set([
+  "button",
+  "checkbox",
+  "color",
+  "file",
+  "radio",
+  "range",
+  "reset",
+  "submit",
+]);
+
+/**
+ * Whether keys typed at `target` belong to it: text fields, and open lists
+ * and menus, which use Space and arrows to pick items.
+ */
+function isTextEntry(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement) {
+    return !NON_TEXT_INPUTS.has(target.type);
+  }
+  return (
+    target.closest(
+      "textarea, select, [contenteditable], [role=listbox], [role=menu], [role=option]",
+    ) != null
+  );
+}
+
+/** Whether `target` is a control that uses arrow keys, like a slider */
+function isControl(target: EventTarget | null) {
   return (
     target instanceof HTMLElement &&
     target.closest(
-      "button, input, select, textarea, [role=slider], [role=combobox], [contenteditable]",
+      "button, input, select, [role=slider], [role=combobox], [role=group], [role=tablist]",
     ) != null
   );
 }
@@ -100,7 +131,12 @@ function saveResolution(resolution: Resolution) {
   }
 }
 
-export function TranscribeTool() {
+export function TranscribeTool({
+  active,
+}: {
+  /** Whether the tab is showing; keyboard shortcuts only work then */
+  active: boolean;
+}) {
   const [player, setPlayer] = useState<Player | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
@@ -269,21 +305,49 @@ export function TranscribeTool() {
     return () => clearTimeout(timeout);
   }, [notice]);
 
+  // Space controls playback even when a button has focus, like a DAW.
+  // Listens in the capture phase so focused controls don't get it first
+  useEffect(() => {
+    if (!active || spectrogram == null || player == null) return;
+    const isSpace = (e: KeyboardEvent) =>
+      e.key === " " &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !isTextEntry(e.target);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isSpace(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      // Like Ableton: Space plays from the cursor, Shift+Space resumes from
+      // where playback stopped
+      if (player.playing) player.pause();
+      else if (e.shiftKey) player.play();
+      else player.playFrom(cursorRef.current);
+    };
+    // Buttons activate on Space keyup; keep a focused one from firing
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isSpace(e)) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
+  }, [active, spectrogram, player]);
+
   // Keyboard shortcuts
   useEffect(() => {
-    if (spectrogram == null || player == null) return;
+    if (!active || spectrogram == null || player == null) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (isInteractive(e.target)) return;
+      if (isTextEntry(e.target)) return;
+      // Arrow keys belong to focused controls like sliders
+      const onControl = isControl(e.target);
       const mod = e.metaKey || e.ctrlKey;
       const selectedId = selectedIdRef.current;
-      if (e.key === " ") {
-        // Like Ableton: Space plays from the cursor, Shift+Space resumes
-        // from where playback stopped
-        e.preventDefault();
-        if (player.playing) player.pause();
-        else if (e.shiftKey) player.play();
-        else player.playFrom(cursorRef.current);
-      } else if (e.key === "Home") {
+      if (e.key === "Home") {
         e.preventDefault();
         setCursor(0);
         if (player.playing) player.seek(0);
@@ -299,6 +363,16 @@ export function TranscribeTool() {
         e.preventDefault();
         commit((notes) => notes.filter((note) => note.id !== selectedId));
         setSelectedId(null);
+      } else if (e.key === "0" && !mod && !e.altKey) {
+        // Like Ableton: 0 mutes and unmutes the selected note
+        e.preventDefault();
+        commit((notes) =>
+          notes.map((note) =>
+            note.id === selectedId ? { ...note, muted: !note.muted } : note,
+          ),
+        );
+      } else if (onControl) {
+        return;
       } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         e.preventDefault();
         const step = e.key === "ArrowUp" ? VELOCITY_STEP : -VELOCITY_STEP;
@@ -327,7 +401,7 @@ export function TranscribeTool() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [spectrogram, player, commit, undo, redo]);
+  }, [active, spectrogram, player, commit, undo, redo]);
 
   /** Cancels any analysis in progress and returns a signal for a new one */
   const startTask = () => {
@@ -397,6 +471,7 @@ export function TranscribeTool() {
       if (signal.aborted) return;
       p.load(buffer);
       setDuration(buffer.duration);
+      void saveLastFile(file);
       audioRef.current = {
         samples: toMono(buffer),
         sampleRate: buffer.sampleRate,
@@ -414,6 +489,20 @@ export function TranscribeTool() {
       if (!signal.aborted) setProgress(null);
     }
   };
+
+  // Reopen the last file after a reload, once the tab is first shown
+  const restoreLastFile = useEffectEvent(async () => {
+    const file = await loadLastFile();
+    if (file != null && audioRef.current == null && progress == null) {
+      void loadFile(file);
+    }
+  });
+  const triedRestoreRef = useRef(false);
+  useEffect(() => {
+    if (!active || triedRestoreRef.current) return;
+    triedRestoreRef.current = true;
+    void restoreLastFile();
+  }, [active]);
 
   const importMidi = async (file: File) => {
     try {
@@ -749,9 +838,9 @@ export function TranscribeTool() {
             </span>
             <span>
               Drag to draw · drag a note to move, its edge to resize · ↑↓
-              transpose · Alt+↑↓ velocity · Alt-click to delete · click the
-              ruler to set the cursor · Space plays from it, Shift+Space resumes
-              · ⌘/Ctrl+scroll to zoom
+              transpose · Alt+↑↓ velocity · 0 mutes · Alt-click to delete ·
+              click the ruler to set the cursor · Space plays from it,
+              Shift+Space resumes · ⌘/Ctrl+scroll to zoom
             </span>
           </div>
         </>

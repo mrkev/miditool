@@ -314,16 +314,22 @@ export function PianoRoll(props: PianoRollProps) {
       const selected = note.id === selectedId;
       ctx.beginPath();
       ctx.roundRect(x + 0.5, y + 0.5, w - 1, semitoneHeight - 1, 3);
-      // Louder notes are more opaque
-      ctx.fillStyle = selected
-        ? "rgba(125, 211, 252, 0.9)"
-        : `rgba(56, 189, 248, ${0.2 + 0.6 * (note.velocity / 127)})`;
+      // Louder notes are more opaque; muted ones are grey
+      ctx.fillStyle = note.muted
+        ? `rgba(163, 163, 163, ${selected ? 0.55 : 0.25})`
+        : selected
+          ? "rgba(125, 211, 252, 0.9)"
+          : `rgba(56, 189, 248, ${0.2 + 0.6 * (note.velocity / 127)})`;
       ctx.fill();
-      ctx.strokeStyle = selected ? "#fff" : "rgba(186, 230, 253, 0.9)";
+      ctx.strokeStyle = selected
+        ? "#fff"
+        : note.muted
+          ? "rgba(212, 212, 212, 0.6)"
+          : "rgba(186, 230, 253, 0.9)";
       ctx.lineWidth = 1;
       ctx.stroke();
       if (w > 28 && semitoneHeight >= 11) {
-        ctx.fillStyle = "#082f49";
+        ctx.fillStyle = note.muted ? "#d4d4d4" : "#082f49";
         ctx.fillText(noteName(note.pitch), x + 4, y + semitoneHeight / 2);
       }
     }
