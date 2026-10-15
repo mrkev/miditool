@@ -355,21 +355,27 @@ export function PianoRoll(props: PianoRollProps) {
     for (let p = bottomPitch; p <= topPitch; p++) {
       const y = pitchToY(p);
       const black = isBlackKey(p);
-      ctx.fillStyle =
-        p === hoverPitch ? "#7dd3fc" : black ? "#262626" : "#e5e5e5";
+      const hovered = p === hoverPitch;
+      ctx.fillStyle = hovered ? "#7dd3fc" : black ? "#262626" : "#e5e5e5";
+      // The hovered key spans the whole width, so its label fits
       ctx.fillRect(
         0,
         y,
-        black ? KEYS_WIDTH * 0.65 : KEYS_WIDTH,
+        black && !hovered ? KEYS_WIDTH * 0.65 : KEYS_WIDTH,
         semitoneHeight - 1,
       );
-      if (p % 12 === 0 && semitoneHeight >= 9) {
-        ctx.fillStyle = "#525252";
+      // Label C keys, and whichever key is hovered
+      if ((hovered || p % 12 === 0) && semitoneHeight >= 9) {
+        ctx.fillStyle = hovered ? "#082f49" : "#525252";
+        ctx.font = hovered
+          ? "600 10px 'Geist Variable', sans-serif"
+          : "10px 'Geist Variable', sans-serif";
         ctx.textAlign = "right";
         ctx.fillText(noteName(p), KEYS_WIDTH - 4, y + semitoneHeight / 2);
         ctx.textAlign = "left";
       }
     }
+    ctx.font = "10px 'Geist Variable', sans-serif";
 
     // Ruler
     ctx.fillStyle = "#171717";
